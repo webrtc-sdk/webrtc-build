@@ -1,11 +1,11 @@
 import 'package:args/args.dart';
-import 'package:dart_cli/build.dart';
+import '../lib/build.dart';
 
 void main(List<String> arguments) {
   final ArgParser argParser = new ArgParser()
     ..addOption('build-settings',
         abbr: 's',
-        defaultsTo: 'build_settings.yaml',
+        defaultsTo: 'webrtc_build_settings.yaml',
         help: "webrtc build seetings file?")
     ..addFlag('help',
         abbr: 'h', negatable: false, help: "Displays this help information.");
@@ -16,6 +16,7 @@ void main(List<String> arguments) {
 ** WebRTC Build CLI **
 ${argParser.usage}
     """);
+    return;
   }
   final String settingFile = argResults['build-settings'];
   build(Options()..settings = settingFile);

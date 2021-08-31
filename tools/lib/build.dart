@@ -13,7 +13,7 @@ Future<void> build(Options opts) async {
   //Map<String, String> env = Platform.environment;
   //env.forEach((k, v) => print("$k => $v\n"));
 
-  Map? config = loadYamlFileSync("build_settings.yaml");
+  Map? config = loadYamlFileSync(opts.settings!);
   print(JsonEncoder.withIndent(' ').convert(config));
 
   Map? downloads = config!['downloads'] as Map;
