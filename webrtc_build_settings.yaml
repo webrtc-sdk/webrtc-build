@@ -1,0 +1,52 @@
+env:
+  source_dir: '_source'
+  build_dir: '_build'
+
+downloads:
+  webrtc_src:
+    repo: https://github.com/webrtc-sdk/webrtc.git
+    branch: main
+    path: src
+
+  depot_tools:
+    repo: https://chromium.googlesource.com/chromium/tools/depot_tools.git
+    branch: main
+    path: depot_tools
+
+build_dir: out
+
+base_gn_args:
+  is_component_build: false 
+  rtc_include_tests: false 
+  is_debug: false
+  enable_dsyms: false
+  rtc_libvpx_build_vp9: true
+  use_goma: false
+  rtc_enable_symbol_export: true
+  rtc_build_examples: false
+  rtc_use_h264: true
+  use_rtti: true
+  libcxx_abi_unstable: false
+  use_custom_libcxx: false
+
+platforms:
+  android:
+    script: 'python ./webrtc/src/tools_webrtc/android/build_aar.py --build-dir $build_dir/webrtc_android --output $build_dir/webrtc_android/libwebrtc.aar --arch armeabi-v7a arm64-v8a --extra-gn-args $gn_args'
+    gn_args:
+      is_java_debug: false
+
+  ios:
+    script: 'python ./tools_webrtc/ios/build_ios_libs.py --build_config release --arch arm64 arm x64 x86 --bitcode --extra-gn-args $gn_args'
+    gn_args:
+      use_xcode_clang: true
+      ios_enable_code_signing: false
+      ios_enable_bitcode: true
+      ios_deployment_target: 10.0
+
+  mac:
+    script: 'gn gen out/mac-$arch --args="$gn_args"'
+    archs: ['x64', 'arm64']
+    gn_args:
+      target_os: 'mac'
+      target_cpu: 'x64'
+      mac_deployment_target: 10.10
