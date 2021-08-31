@@ -2,6 +2,7 @@
 
 ## iOS
 
+```bash
 python ./tools_webrtc/ios/build_ios_libs.py --build_config release --arch arm64 arm x64 x86 --bitcode --extra-gn-args \
       rtc_libvpx_build_vp9=true \
       rtc_include_tests=false \
@@ -10,6 +11,7 @@ python ./tools_webrtc/ios/build_ios_libs.py --build_config release --arch arm64 
       use_rtti=true \
       libcxx_abi_unstable=false \
       enable_dsyms=false
+```
 
 ## macOS X64
 
