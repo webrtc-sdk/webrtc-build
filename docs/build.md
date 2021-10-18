@@ -170,6 +170,8 @@ Create a release zip file
 ```
 cd out/
 zip --symlinks -9 -r WebRTC.xcframework.zip WebRTC.xcframework
+# hash
+shasum -a 256 WebRTC.xcframework.zip
 ```
 
 ## Android
