@@ -162,7 +162,7 @@ Fix symbolic links issue for macOS
 ```
 cd out/WebRTC.xcframework/macos-arm64_x86_64/WebRTC.framework/
 mv WebRTC Versions/A/WebRTC
-link -s Versions/Current/WebRTC WebRTC
+ln -s Versions/Current/WebRTC WebRTC
 ```
 
 Create a release zip file
