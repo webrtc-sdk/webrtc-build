@@ -177,7 +177,6 @@ Create xcframework
 xcodebuild -create-xcframework \
         -framework out/ios-arm-arm64-lib/WebRTC.framework \
         -framework out/ios-x86-simulator/WebRTC.framework \
-        -framework out/ios-arm64-simulator/WebRTC.framework \
         -framework out/mac-x64-arm64-lib/WebRTC.framework \
         -output out/WebRTC.xcframework
 cp LICENSE out/WebRTC.xcframework/
