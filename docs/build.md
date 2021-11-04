@@ -59,12 +59,13 @@ gn gen out/ios-arm64 --args="
 ninja -C out/ios-arm64 ios_framework_bundle
 ```
 
-## iOS x64
+## iOS x64 simulator
 
 ```bash
-gn gen out/ios-x64 --args="
+gn gen out/ios-x64-simulator --args="
       target_os=\"ios\"
       target_cpu=\"x64\"
+      target_environment=\"simulator\"
       ios_deployment_target=\"10.0\"
       enable_stripping=true
       enable_dsyms=false
@@ -79,7 +80,31 @@ gn gen out/ios-x64 --args="
       rtc_enable_protobuf=false
       libcxx_abi_unstable=false"
 
-ninja -C out/ios-x64 ios_framework_bundle
+ninja -C out/ios-x64-simulator ios_framework_bundle
+```
+
+## iOS arm64 simulator
+
+```bash
+gn gen out/ios-arm64-simulator --args="
+      target_os=\"ios\"
+      target_cpu=\"arm64\"
+      target_environment=\"simulator\"
+      ios_deployment_target=\"10.0\"
+      enable_stripping=true
+      enable_dsyms=false
+      is_debug=false
+      rtc_include_tests=false
+      rtc_build_examples=false
+      rtc_use_h264=false
+      rtc_libvpx_build_vp9=true
+      rtc_enable_symbol_export=true
+      is_component_build=false
+      use_rtti=true
+      rtc_enable_protobuf=false
+      libcxx_abi_unstable=false"
+
+ninja -C out/ios-arm64-simulator ios_framework_bundle
 ```
 
 ## macOS X64
@@ -151,7 +176,8 @@ Create xcframework
 ```bash
 xcodebuild -create-xcframework \
         -framework out/ios-arm-arm64-lib/WebRTC.framework \
-        -framework out/ios-x64/WebRTC.framework \
+        -framework out/ios-x86-simulator/WebRTC.framework \
+        -framework out/ios-arm64-simulator/WebRTC.framework \
         -framework out/mac-x64-arm64-lib/WebRTC.framework \
         -output out/WebRTC.xcframework
 cp LICENSE out/WebRTC.xcframework/
