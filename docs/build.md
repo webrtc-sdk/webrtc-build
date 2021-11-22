@@ -212,13 +212,20 @@ cp -R out/ios-arm64/WebRTC.framework out/ios-arm-arm64-lib/WebRTC.framework
 lipo -create -output out/ios-arm-arm64-lib/WebRTC.framework/WebRTC out/ios-arm/WebRTC.framework/WebRTC out/ios-arm64/WebRTC.framework/WebRTC
 ```
 
+Merge the arm64 and arm libraries of iOS simulator.
+
+```bash
+mkdir -p out/ios-sim-arm64-x64-lib
+cp -R out/ios-arm64-simulator/WebRTC.framework out/ios-sim-arm64-x64-lib/WebRTC.framework
+lipo -create -output out/ios-sim-arm64-x64-lib/WebRTC.framework/WebRTC out/ios-arm64-simulator/WebRTC.framework/WebRTC out/ios-x64-simulator/WebRTC.framework/WebRTC
+```
+
 Create xcframework
 
 ```bash
 xcodebuild -create-xcframework \
         -framework out/ios-arm-arm64-lib/WebRTC.framework \
-        -framework out/ios-x64-simulator/WebRTC.framework \
-        -framework out/ios-arm64-simulator/WebRTC.framework \
+        -framework out/ios-sim-arm64-x64-lib/WebRTC.framework \
         -framework out/mac-x64-arm64-lib/WebRTC.framework \
         -output out/WebRTC.xcframework
 cp LICENSE out/WebRTC.xcframework/
