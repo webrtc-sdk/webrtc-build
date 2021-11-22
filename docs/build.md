@@ -3,35 +3,44 @@
 ## iOS
 
 ```bash
-python ./tools_webrtc/ios/build_ios_libs.py --build_config release --arch arm64 arm x64 x86 --bitcode --extra-gn-args \
+python ./tools_webrtc/ios/build_ios_libs.py --build_config release --arch device:arm64 simulator:arm64 simulator:x64 --extra-gn-args \ 
       rtc_libvpx_build_vp9=true \
       rtc_include_tests=false \
       rtc_build_examples=false \
-      rtc_use_h264=true \
+      rtc_use_h264=false \
       use_rtti=true \
       libcxx_abi_unstable=false \
-      enable_dsyms=false
+      enable_dsyms=false \
+      is_debug=false
 ```
 
 ## iOS arm
 
 ```bash
 gn gen out/ios-arm --args="
-      target_os=\"ios\"
-      target_cpu=\"arm\"
-      ios_deployment_target=\"10.0\"
-      enable_stripping=true
-      enable_dsyms=false
-      is_debug=false
-      rtc_include_tests=false
-      rtc_build_examples=false
-      rtc_use_h264=false
-      rtc_libvpx_build_vp9=true
-      rtc_enable_symbol_export=true
-      is_component_build=false
-      use_rtti=true
-      rtc_enable_protobuf=false
-      libcxx_abi_unstable=false"
+      target_os = \"ios\"
+      ios_enable_code_signing = false
+      use_xcode_clang = true
+      is_component_build = false
+      rtc_include_tests = false
+      is_debug = false
+      target_environment = \"device\"
+      target_cpu = \"arm\"
+      ios_deployment_target = \"10.0\"
+      rtc_libvpx_build_vp9 = false
+      enable_ios_bitcode = false
+      use_goma = false
+      rtc_enable_symbol_export = true
+      rtc_libvpx_build_vp9 = true
+      rtc_include_tests = false
+      rtc_build_examples = false
+      rtc_use_h264 = false
+      use_rtti = true
+      libcxx_abi_unstable = false
+      enable_dsyms = false
+      is_debug = false
+      enable_dsyms = true
+      enable_stripping = true"
 
 ninja -C out/ios-arm ios_framework_bundle
 ```
@@ -40,21 +49,29 @@ ninja -C out/ios-arm ios_framework_bundle
 
 ```bash
 gn gen out/ios-arm64 --args="
-      target_os=\"ios\"
-      target_cpu=\"arm64\"
-      ios_deployment_target=\"10.0\"
-      enable_stripping=true
-      enable_dsyms=false
-      is_debug=false
-      rtc_include_tests=false
-      rtc_build_examples=false
-      rtc_use_h264=false
-      rtc_libvpx_build_vp9=true
-      rtc_enable_symbol_export=true
-      is_component_build=false
-      use_rtti=true
-      rtc_enable_protobuf=false
-      libcxx_abi_unstable=false"
+      target_os = \"ios\"
+      ios_enable_code_signing = false
+      use_xcode_clang = true
+      is_component_build = false
+      rtc_include_tests = false
+      is_debug = false
+      target_environment = \"device\"
+      target_cpu = \"arm64\"
+      ios_deployment_target = \"10.0\"
+      rtc_libvpx_build_vp9 = false
+      enable_ios_bitcode = false
+      use_goma = false
+      rtc_enable_symbol_export = true
+      rtc_libvpx_build_vp9 = true
+      rtc_include_tests = false
+      rtc_build_examples = false
+      rtc_use_h264 = false
+      use_rtti = true
+      libcxx_abi_unstable = false
+      enable_dsyms = false
+      is_debug = false
+      enable_dsyms = true
+      enable_stripping = true"
 
 ninja -C out/ios-arm64 ios_framework_bundle
 ```
@@ -63,22 +80,29 @@ ninja -C out/ios-arm64 ios_framework_bundle
 
 ```bash
 gn gen out/ios-x64-simulator --args="
-      target_os=\"ios\"
-      target_cpu=\"x64\"
-      target_environment=\"simulator\"
-      ios_deployment_target=\"10.0\"
-      enable_stripping=true
-      enable_dsyms=false
-      is_debug=false
-      rtc_include_tests=false
-      rtc_build_examples=false
-      rtc_use_h264=false
-      rtc_libvpx_build_vp9=true
-      rtc_enable_symbol_export=true
-      is_component_build=false
-      use_rtti=true
-      rtc_enable_protobuf=false
-      libcxx_abi_unstable=false"
+      target_os = \"ios\"
+      ios_enable_code_signing = false
+      use_xcode_clang = true
+      is_component_build = false
+      rtc_include_tests = false
+      is_debug = false
+      target_environment = \"simulator\"
+      target_cpu = \"x64\"
+      ios_deployment_target = \"12.0\"
+      rtc_libvpx_build_vp9 = false
+      enable_ios_bitcode = false
+      use_goma = false
+      rtc_enable_symbol_export = true
+      rtc_libvpx_build_vp9 = true
+      rtc_include_tests = false
+      rtc_build_examples = false
+      rtc_use_h264 = false
+      use_rtti = true
+      libcxx_abi_unstable = false
+      enable_dsyms = false
+      is_debug = false
+      enable_dsyms = true
+      enable_stripping = true"
 
 ninja -C out/ios-x64-simulator ios_framework_bundle
 ```
@@ -87,22 +111,29 @@ ninja -C out/ios-x64-simulator ios_framework_bundle
 
 ```bash
 gn gen out/ios-arm64-simulator --args="
-      target_os=\"ios\"
-      target_cpu=\"arm64\"
-      target_environment=\"simulator\"
-      ios_deployment_target=\"10.0\"
-      enable_stripping=true
-      enable_dsyms=false
-      is_debug=false
-      rtc_include_tests=false
-      rtc_build_examples=false
-      rtc_use_h264=false
-      rtc_libvpx_build_vp9=true
-      rtc_enable_symbol_export=true
-      is_component_build=false
-      use_rtti=true
-      rtc_enable_protobuf=false
-      libcxx_abi_unstable=false"
+      target_os = \"ios\"
+      ios_enable_code_signing = false
+      use_xcode_clang = true
+      is_component_build = false
+      rtc_include_tests = false
+      is_debug = false
+      target_environment = \"simulator\"
+      target_cpu = \"arm64\"
+      ios_deployment_target = \"12.0\"
+      rtc_libvpx_build_vp9 = false
+      enable_ios_bitcode = false
+      use_goma = false
+      rtc_enable_symbol_export = true
+      rtc_libvpx_build_vp9 = true
+      rtc_include_tests = false
+      rtc_build_examples = false
+      rtc_use_h264 = false
+      use_rtti = true
+      libcxx_abi_unstable = false
+      enable_dsyms = false
+      is_debug = false
+      enable_dsyms = true
+      enable_stripping = true"
 
 ninja -C out/ios-arm64-simulator ios_framework_bundle
 ```
@@ -113,19 +144,24 @@ ninja -C out/ios-arm64-simulator ios_framework_bundle
 gn gen out/macOS-x64 --args="
       target_os=\"mac\"
       target_cpu=\"x64\"
-      mac_deployment_target=\"10.10\"
-      enable_stripping=true
-      enable_dsyms=false
-      is_debug=false
-      rtc_include_tests=false
-      rtc_build_examples=false
-      rtc_use_h264=false
-      rtc_libvpx_build_vp9=true
-      rtc_enable_symbol_export=true
-      is_component_build=false
-      use_rtti=true
-      rtc_enable_protobuf=false
-      libcxx_abi_unstable=false"
+      mac_deployment_target=\"10.11\"
+      is_component_build = false
+      rtc_include_tests = false
+      is_debug = false
+      target_cpu = \"x64\"
+      rtc_libvpx_build_vp9 = false
+      use_goma = false
+      rtc_enable_symbol_export = true
+      rtc_libvpx_build_vp9 = true
+      rtc_include_tests = false
+      rtc_build_examples = false
+      rtc_use_h264 = false
+      use_rtti = true
+      libcxx_abi_unstable = false
+      enable_dsyms = false
+      is_debug = false
+      enable_dsyms = true
+      enable_stripping = true"
 
 ninja -C out/macOS-x64 mac_framework_bundle
 ```
@@ -135,20 +171,25 @@ ninja -C out/macOS-x64 mac_framework_bundle
 ```bash
 gn gen out/macOS-arm64 --args="
       target_os=\"mac\"
-      target_cpu=\"arm64\"
-      mac_deployment_target=\"10.10\"
-      enable_stripping=true
-      enable_dsyms=false
-      is_debug=false
-      rtc_include_tests=false
-      rtc_build_examples=false
-      rtc_use_h264=false
-      rtc_libvpx_build_vp9=true
-      rtc_enable_symbol_export=true
-      is_component_build=false
-      use_rtti=true
-      rtc_enable_protobuf=false
-      libcxx_abi_unstable=false"
+      target_cpu=\"x64\"
+      mac_deployment_target=\"10.11\"
+      is_component_build = false
+      rtc_include_tests = false
+      is_debug = false
+      target_cpu = \"arm64\"
+      rtc_libvpx_build_vp9 = false
+      use_goma = false
+      rtc_enable_symbol_export = true
+      rtc_libvpx_build_vp9 = true
+      rtc_include_tests = false
+      rtc_build_examples = false
+      rtc_use_h264 = false
+      use_rtti = true
+      libcxx_abi_unstable = false
+      enable_dsyms = false
+      is_debug = false
+      enable_dsyms = true
+      enable_stripping = true"
 
 ninja -C out/macOS-arm64 mac_framework_bundle
 ```
@@ -177,6 +218,7 @@ Create xcframework
 xcodebuild -create-xcframework \
         -framework out/ios-arm-arm64-lib/WebRTC.framework \
         -framework out/ios-x64-simulator/WebRTC.framework \
+        -framework out/ios-arm64-simulator/WebRTC.framework \
         -framework out/mac-x64-arm64-lib/WebRTC.framework \
         -output out/WebRTC.xcframework
 cp LICENSE out/WebRTC.xcframework/
