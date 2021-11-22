@@ -216,7 +216,7 @@ Merge the arm64 and x64 libraries of iOS simulator.
 
 ```bash
 mkdir -p out/ios-simulator-arm64-x64-lib
-cp -R out/ios-arm64-simulator/WebRTC.framework out/ios-sim-arm64-x64-lib/WebRTC.framework
+cp -R out/ios-arm64-simulator/WebRTC.framework out/ios-simulator-arm64-x64-lib/WebRTC.framework
 lipo -create -output out/ios-simulator-arm64-x64-lib/WebRTC.framework/WebRTC out/ios-arm64-simulator/WebRTC.framework/WebRTC out/ios-x64-simulator/WebRTC.framework/WebRTC
 ```
 
