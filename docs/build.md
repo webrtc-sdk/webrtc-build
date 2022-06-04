@@ -8,12 +8,9 @@ gn gen out/ios-arm-device --args="
       ios_enable_code_signing = false
       use_xcode_clang = true
       is_component_build = false
-      rtc_include_tests = false
-      is_debug = false
       target_environment = \"device\"
       target_cpu = \"arm\"
       ios_deployment_target = \"10.0\"
-      rtc_libvpx_build_vp9 = false
       enable_ios_bitcode = false
       use_goma = false
       rtc_enable_symbol_export = true
@@ -23,9 +20,8 @@ gn gen out/ios-arm-device --args="
       rtc_use_h264 = false
       use_rtti = true
       libcxx_abi_unstable = false
-      enable_dsyms = false
       is_debug = false
-      enable_dsyms = true
+      enable_dsyms = false
       enable_stripping = true"
 
 ninja -C out/ios-arm-device ios_framework_bundle
@@ -39,12 +35,9 @@ gn gen out/ios-arm64-device --args="
       ios_enable_code_signing = false
       use_xcode_clang = true
       is_component_build = false
-      rtc_include_tests = false
-      is_debug = false
       target_environment = \"device\"
       target_cpu = \"arm64\"
       ios_deployment_target = \"10.0\"
-      rtc_libvpx_build_vp9 = false
       enable_ios_bitcode = false
       use_goma = false
       rtc_enable_symbol_export = true
@@ -54,9 +47,8 @@ gn gen out/ios-arm64-device --args="
       rtc_use_h264 = false
       use_rtti = true
       libcxx_abi_unstable = false
-      enable_dsyms = false
       is_debug = false
-      enable_dsyms = true
+      enable_dsyms = false
       enable_stripping = true"
 
 ninja -C out/ios-arm64-device ios_framework_bundle
@@ -70,12 +62,9 @@ gn gen out/ios-x64-simulator --args="
       ios_enable_code_signing = false
       use_xcode_clang = true
       is_component_build = false
-      rtc_include_tests = false
-      is_debug = false
       target_environment = \"simulator\"
       target_cpu = \"x64\"
       ios_deployment_target = \"12.0\"
-      rtc_libvpx_build_vp9 = false
       enable_ios_bitcode = false
       use_goma = false
       rtc_enable_symbol_export = true
@@ -85,9 +74,8 @@ gn gen out/ios-x64-simulator --args="
       rtc_use_h264 = false
       use_rtti = true
       libcxx_abi_unstable = false
-      enable_dsyms = false
       is_debug = false
-      enable_dsyms = true
+      enable_dsyms = false
       enable_stripping = true"
 
 ninja -C out/ios-x64-simulator ios_framework_bundle
@@ -101,12 +89,9 @@ gn gen out/ios-arm64-simulator --args="
       ios_enable_code_signing = false
       use_xcode_clang = true
       is_component_build = false
-      rtc_include_tests = false
-      is_debug = false
       target_environment = \"simulator\"
       target_cpu = \"arm64\"
       ios_deployment_target = \"12.0\"
-      rtc_libvpx_build_vp9 = false
       enable_ios_bitcode = false
       use_goma = false
       rtc_enable_symbol_export = true
@@ -116,9 +101,8 @@ gn gen out/ios-arm64-simulator --args="
       rtc_use_h264 = false
       use_rtti = true
       libcxx_abi_unstable = false
-      enable_dsyms = false
       is_debug = false
-      enable_dsyms = true
+      enable_dsyms = false
       enable_stripping = true"
 
 ninja -C out/ios-arm64-simulator ios_framework_bundle
@@ -130,12 +114,10 @@ ninja -C out/ios-arm64-simulator ios_framework_bundle
 gn gen out/macOS-x64 --args="
       target_os=\"mac\"
       target_cpu=\"x64\"
+      use_xcode_clang = true
       mac_deployment_target=\"10.11\"
       is_component_build = false
-      rtc_include_tests = false
-      is_debug = false
       target_cpu = \"x64\"
-      rtc_libvpx_build_vp9 = false
       use_goma = false
       rtc_enable_symbol_export = true
       rtc_libvpx_build_vp9 = true
@@ -144,9 +126,8 @@ gn gen out/macOS-x64 --args="
       rtc_use_h264 = false
       use_rtti = true
       libcxx_abi_unstable = false
-      enable_dsyms = false
       is_debug = false
-      enable_dsyms = true
+      enable_dsyms = false
       enable_stripping = true"
 
 ninja -C out/macOS-x64 mac_framework_bundle
@@ -158,12 +139,10 @@ ninja -C out/macOS-x64 mac_framework_bundle
 gn gen out/macOS-arm64 --args="
       target_os=\"mac\"
       target_cpu=\"x64\"
+      use_xcode_clang = true
       mac_deployment_target=\"10.11\"
       is_component_build = false
-      rtc_include_tests = false
-      is_debug = false
       target_cpu = \"arm64\"
-      rtc_libvpx_build_vp9 = false
       use_goma = false
       rtc_enable_symbol_export = true
       rtc_libvpx_build_vp9 = true
@@ -172,9 +151,8 @@ gn gen out/macOS-arm64 --args="
       rtc_use_h264 = false
       use_rtti = true
       libcxx_abi_unstable = false
-      enable_dsyms = false
       is_debug = false
-      enable_dsyms = true
+      enable_dsyms = false
       enable_stripping = true"
 
 ninja -C out/macOS-arm64 mac_framework_bundle
