@@ -238,6 +238,6 @@ gn gen out/Linux-arm64 --args="target_os=\"linux\" target_cpu=\"arm64\" is_debug
 
 ```console
 set DEPOT_TOOLS_WIN_TOOLCHAIN=0
-gn gen out/Windows-x64 --args="target_os=\"win\" target_cpu=\"x64\" is_debug=false rtc_include_tests=false rtc_use_h264=false is_component_build=false use_rtti=true use_custom_libcxx=false rtc_enable_protobuf=false"
-gn gen out/Windows-x86 --args="target_os=\"win\" target_cpu=\"x86\" is_debug=false rtc_include_tests=false rtc_use_h264=false is_component_build=false use_rtti=true use_custom_libcxx=false rtc_enable_protobuf=false"
+gn gen out/Windows-x64 --args="target_os=\"win\" target_cpu=\"x64\" is_debug=false rtc_include_tests=false rtc_use_h264=true ffmpeg_branding=\"Chrome\"  is_component_build=false use_rtti=true use_custom_libcxx=false rtc_enable_protobuf=false"
+gn gen out/Windows-x86 --args="target_os=\"win\" target_cpu=\"x86\" is_debug=false rtc_include_tests=false rtc_use_h264=true ffmpeg_branding=\"Chrome\"  is_component_build=false use_rtti=true use_custom_libcxx=false rtc_enable_protobuf=false"
 ```
