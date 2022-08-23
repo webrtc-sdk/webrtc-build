@@ -1,0 +1,84 @@
+name: daily build
+
+on:
+  schedule:
+    # 毎日 09:00 JST
+    - cron: "0 0 * * *"
+
+jobs:
+  build-windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        name:
+          - windows_x86_64
+          - windows_arm64
+    runs-on: windows-2019
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        ref: daily
+    - name: Disk Cleanup
+      run: |
+        Get-PSDrive
+        # Cache 済み Docker Image の削除
+        docker rmi $(docker images -q -a)
+        # Android SDK の削除
+        Remove-Item -Recurse -Force $Env:ANDROID_HOME -ErrorAction Ignore
+        Remove-Item -Recurse -Force $Env:ANDROID_NDK_HOME -ErrorAction Ignore
+        # JVM の削除
+        Remove-Item -Recurse -Force $Env:JAVA_HOME_11_X64 -ErrorAction Ignore
+        Remove-Item -Recurse -Force $Env:JAVA_HOME_8_X64 -ErrorAction Ignore
+        Get-PSDrive
+    - run: Copy-Item VERSION.head VERSION
+    - run: "& .\\build.${{ matrix.name }}.ps1"
+  build-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        name:
+          - macos_arm64
+          - macos_x86_64
+          - ios
+    runs-on: macOS-11.0
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        ref: daily
+    - run: cp VERSION.head VERSION
+    - run: ./build.${{ matrix.name }}.sh
+  build-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        name:
+          - raspberry-pi-os_armv6
+          - raspberry-pi-os_armv7
+          - raspberry-pi-os_armv8
+          - ubuntu-18.04_armv8
+          - ubuntu-20.04_armv8
+          - ubuntu-18.04_x86_64
+          - ubuntu-20.04_x86_64
+          - ubuntu-22.04_x86_64
+          - android
+    runs-on: ubuntu-18.04
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        ref: daily
+    - name: Disk Cleanup
+      run: |
+        df -h
+        docker rmi `docker images -q -a`
+        # 3.9GB
+        sudo rm -rf /usr/local/share/boost
+        # 17GB
+        sudo rm -rf /usr/share/dotnet
+        df -h
+    - run: cp VERSION.head VERSION
+    - run: ./build.${{ matrix.name }}.sh
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v1
+      with:
+        name: webrtc.${{ matrix.name }}.tar.gz
+        path: _package/${{ matrix.name }}/webrtc.tar.gz
