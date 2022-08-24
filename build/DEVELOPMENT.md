@@ -124,3 +124,15 @@ Local builds can only be built in the required environments:
   - `ubuntu-20.04_x86_64` requires Ubuntu 20.04.
   - Ubuntu must be on x86_64 to build.
 - Non-Ubuntu Linux-based OSes cannot build.
+
+## CI
+
+Github Actions acts as the CI for the builds. Builds are run on all available targets. Artifacts are available after each build.
+
+### Builds
+
+Builds are configured run on each push and tag. A build can be manually initiated by going to the Actions tab, selecting the build workflow, and clicking `Run Workflow`. A `webrtc-sdk` commit ref can be specified in the commit hash field.
+
+### Releasing
+
+A release build workflow is run when a tag is pushed with the prefix `m`. A release is created with the name with the tag.
