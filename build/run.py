@@ -181,14 +181,12 @@ PATCHES = {
         'add_license_dav1d.patch',
         'windows_add_deps.patch',
         'windows_silence_warnings.patch',
-        'windows_fix_towupper.patch',
         'fix_mocks.patch',
     ],
     'windows_arm64': [
         'add_license_dav1d.patch',
         'windows_add_deps.patch',
         'windows_silence_warnings.patch',
-        'windows_fix_towupper.patch',
         'fix_mocks.patch',
     ],
     'macos_x86_64': [
