@@ -309,7 +309,9 @@ VersionInfo = collections.namedtuple('VersionInfo', [
 
 def archive_objects(ar, dir, output):
     with cd(dir):
-        files = cmdcap(['find', '.', '-name', '*.o']).splitlines()
+        # Don't include the nasm assembler libwebrtc.a
+        files = cmdcap(['find', '.', '-name', '*.o', '-not', '-path', './third_party/nasm/*']).splitlines()
+        print(files)
         rm_rf(output)
         cmd([ar, '-rc', output, *files])
 
