@@ -70,6 +70,7 @@ jobs:
     - uses: actions/checkout@v2
     - name: Select Xcode 13.0
       run: sudo xcode-select --switch /Applications/Xcode_13.0.app/Contents/Developer
+    - run: brew install ninja
     - run: ./build.${{ matrix.name }}.sh "${{ github.event.inputs.commitHash }}"
     - name: Upload Artifact
       uses: actions/upload-artifact@v1
