@@ -23,6 +23,7 @@ apt-get -y install \
   libstdc++6 \
   locales \
   lsb-release \
+  ninja-build \
   multistrap \
   python \
   python-setuptools \
