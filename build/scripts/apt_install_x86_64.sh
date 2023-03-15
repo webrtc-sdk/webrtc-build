@@ -20,6 +20,7 @@ apt-get -y install \
   lsb-release \
   pkg-config \
   python3 \
+  ninja-build \
   python3-setuptools \
   rsync \
   sudo \
