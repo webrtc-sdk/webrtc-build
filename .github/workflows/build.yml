@@ -94,7 +94,7 @@ jobs:
           # - ubuntu-20.04_x86_64
           # - ubuntu-22.04_x86_64
           - android
-    runs-on: ubuntu-20.04
+    runs-on: buildjet-4vcpu-ubuntu-2204
     steps:
     - uses: actions/checkout@v2
     - name: Disk Cleanup
@@ -107,12 +107,12 @@ jobs:
         # 17GB
         sudo rm -rf /usr/share/dotnet
         df -h
-    #- run: ./build.${{ matrix.name }}.sh "${{ github.event.inputs.commitHash }}"
-    #- name: Upload Artifact
-    #  uses: actions/upload-artifact@v1
-    #  with:
-    #    name: webrtc.${{ matrix.name }}.tar.gz
-    #    path: build/_package/${{ matrix.name }}/webrtc.tar.gz
+    - run: ./build.${{ matrix.name }}.sh "${{ github.event.inputs.commitHash }}"
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v1
+      with:
+        name: webrtc.${{ matrix.name }}.tar.gz
+        path: build/_package/${{ matrix.name }}/webrtc.tar.gz
   create-release:
     name: Create Release
     if: contains(github.ref, 'tags/m')
@@ -156,7 +156,7 @@ jobs:
           # - ubuntu-18.04_x86_64
           # - ubuntu-20.04_x86_64
           # - ubuntu-22.04_x86_64
-          # - android
+          - android
     name: Release ${{ matrix.name }}
     if: contains(github.ref, 'tags/m')
     needs:
