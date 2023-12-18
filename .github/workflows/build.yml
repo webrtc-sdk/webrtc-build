@@ -94,6 +94,7 @@ jobs:
           # - ubuntu-20.04_x86_64
           # - ubuntu-22.04_x86_64
           - android
+          - android_prefixed
     runs-on: buildjet-4vcpu-ubuntu-2204
     steps:
     - uses: actions/checkout@v2
