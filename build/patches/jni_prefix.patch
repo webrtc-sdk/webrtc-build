@@ -381,7 +381,7 @@ index b739c86d1..028932256 100755
        values = {
            'JAVA_CLASS':
            EscapeClassName(full_clazz),
-+          'ORIGINAL_CLASS': 
++          'ORIGINAL_CLASS':
 +          EscapeClassName(RemovePrefixClassName(full_clazz, self.package_prefix)),
            'MAYBE_SPLIT_NAME_ARG':
            (('"%s", ' % self.split_name) if self.split_name else '')
@@ -417,7 +417,7 @@ index b739c86d1..028932256 100755
 +
 +  if args.enable_jni_multiplexing:
 +    print('jni multiplexing')
-+  
++
    if output_names:
      # Remove existing headers so that moving .java source files but not updating
      # the corresponding C++ include will be a compile failure (otherwise

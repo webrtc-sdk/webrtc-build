@@ -580,6 +580,21 @@ def build_webrtc_android(
 
     mkdir_p(webrtc_build_dir)
 
+    # Java ファイル作成
+    # WebrtcBuildVersion.java file creation.
+    branch, commit, revision, maint = get_webrtc_version_info(version_info)
+    name = 'WebrtcBuildVersion'
+    lines = []
+    lines.append('package org.webrtc;')
+    lines.append(f'public interface {name} {{')
+    lines.append(f'    public static final String webrtc_branch = "{branch}";')
+    lines.append(f'    public static final String webrtc_commit = "{commit}";')
+    lines.append(f'    public static final String webrtc_revision = "{revision}";')
+    lines.append(f'    public static final String maint_version = "{maint}";')
+    lines.append('}')
+    with open(os.path.join(webrtc_src_dir, 'sdk', 'android', 'api', 'org', 'webrtc', f'{name}.java'), 'wb') as f:
+        f.writelines(map(lambda x: (x + '\n').encode('utf-8'), lines))
+
     gn_args_base = [
         f"is_debug={'true' if debug else 'false'}",
         f"is_java_debug={'true' if debug else 'false'}",
