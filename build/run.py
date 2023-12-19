@@ -206,6 +206,12 @@ PATCHES = {
         'android_webrtc_version.patch',
         'fix_mocks.patch',
     ],
+    'android_prefixed': [
+        'add_license_dav1d.patch',
+        'android_webrtc_version.patch',
+        'fix_mocks.patch',
+        'jni_prefix.patch'
+    ],
     'raspberry-pi-os_armv6': [
         'add_license_dav1d.patch',
         'fix_mocks.patch',
@@ -267,7 +273,7 @@ def get_webrtc(source_dir, patch_dir, version, target,
             cmd(['gclient'])
             shutil.copyfile(os.path.join(BASE_DIR, '.gclient'), '.gclient')
             cmd(['git', 'clone', 'https://github.com/webrtc-sdk/webrtc.git', 'src'])
-            if target == 'android':
+            if target in ['android', 'android_prefixed']:
                 with open('.gclient', 'a') as f:
                     f.write("target_os = [ 'android' ]\n")
             if target == 'ios':
@@ -399,6 +405,7 @@ WEBRTC_BUILD_TARGETS = {
     'macos_arm64': [*WEBRTC_BUILD_TARGETS_MACOS_COMMON, 'sdk:mac_framework_objc'],
     'ios': [*WEBRTC_BUILD_TARGETS_MACOS_COMMON, 'sdk:framework_objc'],
     'android': ['sdk/android:libwebrtc', 'sdk/android:libjingle_peerconnection_so', 'sdk/android:native_api'],
+    'android_prefixed': ['sdk/android:libwebrtc', 'sdk/android:libjingle_peerconnection_so', 'sdk/android:native_api'],
 }
 
 
@@ -822,7 +829,7 @@ def package_webrtc(source_dir, build_dir, package_dir, target,
 
     # ライセンス生成
     # License creation
-    if target == 'android':
+    if target in ['android', 'android_prefixed']:
         dirs = []
         for arch in ANDROID_ARCHS:
             dirs += [
@@ -872,7 +879,7 @@ def package_webrtc(source_dir, build_dir, package_dir, target,
             (['libwebrtc.a'], ['lib', 'libwebrtc.a']),
             (['framework', 'WebRTC.xcframework'], ['Frameworks', 'WebRTC.xcframework']),
         ]
-    elif target == 'android':
+    elif target in ['android', 'android_prefixed']:
         # aar を展開して classes.jar を取り出す
         # Extract aar and grab classes.jar
         tmp = os.path.join(webrtc_build_dir, 'tmp')
@@ -931,6 +938,7 @@ TARGETS = [
     'raspberry-pi-os_armv7',
     'raspberry-pi-os_armv8',
     'android',
+    'android_prefixed',
     'ios',
 ]
 
@@ -965,7 +973,8 @@ def check_target(target):
                       'raspberry-pi-os_armv6',
                       'raspberry-pi-os_armv7',
                       'raspberry-pi-os_armv8',
-                      'android'):
+                      'android',
+                      'android_prefixed'):
             return True
 
         # x86_64 用ビルドはバージョンが合っている必要がある
@@ -1150,7 +1159,7 @@ def main():
                 build_webrtc_ios(**build_webrtc_args,
                                  nobuild_framework=args.webrtc_nobuild_ios_framework,
                                  overlap_build_dir=args.webrtc_overlap_ios_build_dir)
-            elif args.target == 'android':
+            elif args.target in ['android', 'android_prefixed']:
                 build_webrtc_android(**build_webrtc_args, nobuild_aar=args.webrtc_nobuild_android_aar)
             else:
                 build_webrtc(**build_webrtc_args, target=args.target)

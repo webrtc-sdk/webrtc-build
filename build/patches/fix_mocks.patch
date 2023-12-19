@@ -11,15 +11,15 @@ index 8483aa3da8..f66cdca0ba 100644
  }  // namespace test
  }  // namespace webrtc
 diff --git a/pc/test/fake_audio_capture_module.h b/pc/test/fake_audio_capture_module.h
-index fd13a85f89..81bdbf9f8c 100644
+index c04373cdfd..ab6ff3492a 100644
 --- a/pc/test/fake_audio_capture_module.h
 +++ b/pc/test/fake_audio_capture_module.h
-@@ -140,6 +140,8 @@ class FakeAudioCaptureModule : public webrtc::AudioDeviceModule,
-   int32_t EnableBuiltInNS(bool enable) override { return -1; }
+@@ -137,6 +137,8 @@ class FakeAudioCaptureModule : public webrtc::AudioDeviceModule {
  
    int32_t GetPlayoutUnderrunCount() const override { return -1; }
-+
+ 
 +  int32_t SetAudioDeviceSink(webrtc::AudioDeviceSink* sink) const override { return 0; }
- #if defined(WEBRTC_IOS)
-   int GetPlayoutAudioParameters(
-       webrtc::AudioParameters* params) const override {
++
+   absl::optional<webrtc::AudioDeviceModule::Stats> GetStats() const override {
+     return webrtc::AudioDeviceModule::Stats();
+   }
