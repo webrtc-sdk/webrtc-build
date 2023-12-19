@@ -226,6 +226,19 @@ index 494b43f6d3..1a63c66558 100644
    }
  }
  
+diff --git a/sdk/android/api/org/webrtc/PeerConnectionFactory.java b/sdk/android/api/org/webrtc/PeerConnectionFactory.java
+index 1817d41beb..1c7bfbf480 100644
+--- a/sdk/android/api/org/webrtc/PeerConnectionFactory.java
++++ b/sdk/android/api/org/webrtc/PeerConnectionFactory.java
+@@ -89,7 +89,7 @@ public class PeerConnectionFactory {
+       private String fieldTrials = "";
+       private boolean enableInternalTracer;
+       private NativeLibraryLoader nativeLibraryLoader = new NativeLibrary.DefaultLoader();
+-      private String nativeLibraryName = "jingle_peerconnection_so";
++      private String nativeLibraryName = "lkjingle_peerconnection_so";
+       @Nullable private Loggable loggable;
+       @Nullable private Severity loggableSeverity;
+ 
 diff --git a/sdk/android/src/jni/jni_helpers.h b/sdk/android/src/jni/jni_helpers.h
 index 4e5781027a..5d17a87c50 100644
 --- a/sdk/android/src/jni/jni_helpers.h
