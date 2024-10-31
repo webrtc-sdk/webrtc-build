@@ -78,7 +78,7 @@ jobs:
     - run: cp VERSION.head VERSION
     - run: ./build.${{ matrix.name }}.sh
     - name: Upload Artifact
-      uses: actions/upload-artifact@v1
+      uses: actions/upload-artifact@v4
       with:
         name: webrtc.${{ matrix.name }}.tar.gz
         path: _package/${{ matrix.name }}/webrtc.tar.gz

@@ -110,7 +110,7 @@ jobs:
         df -h
     - run: ./build.${{ matrix.name }}.sh "${{ github.event.inputs.commitHash }}"
     - name: Upload Artifact
-      uses: actions/upload-artifact@v1
+      uses: actions/upload-artifact@v4
       with:
         name: webrtc.${{ matrix.name }}.tar.gz
         path: build/_package/${{ matrix.name }}/webrtc.tar.gz
@@ -137,7 +137,7 @@ jobs:
       shell: bash
       run: echo "UPLOAD_URL='${{ steps.create_release.outputs.upload_url }}'" > create-release.env
     - name: Upload create-release Environment
-      uses: actions/upload-artifact@v1
+      uses: actions/upload-artifact@v4
       with:
         name: create-release.env
         path: create-release.env
