@@ -32,7 +32,7 @@ jobs:
   #         - windows_arm64
   #   runs-on: windows-2019
   #   steps:
-  #   - uses: actions/checkout@v2
+  #   - uses: actions/checkout@v4
   #   - name: Disk Cleanup
   #     run: |
   #       Get-PSDrive
@@ -50,7 +50,7 @@ jobs:
   #       Get-PSDrive
   #   - run: "& .\\build.${{ matrix.name }}.ps1 \"${{ github.event.inputs.commitHash }}\""
   #   - name: Upload Artifact
-  #     uses: actions/upload-artifact@v1
+  #     uses: actions/upload-artifact@v4
   #     with:
   #       name: webrtc.${{ matrix.name }}.zip
   #       path: build\_package\${{ matrix.name }}\webrtc.zip
@@ -67,13 +67,13 @@ jobs:
   #         - ios
   #   runs-on: macos-11
   #   steps:
-  #   - uses: actions/checkout@v2
+  #   - uses: actions/checkout@v4
   #   - name: Select Xcode 13.0
   #     run: sudo xcode-select --switch /Applications/Xcode_13.0.app/Contents/Developer
   #   - run: brew install ninja
   #   - run: ./build.${{ matrix.name }}.sh "${{ github.event.inputs.commitHash }}"
   #   - name: Upload Artifact
-  #     uses: actions/upload-artifact@v1
+  #     uses: actions/upload-artifact@v4
   #     with:
   #       name: webrtc.${{ matrix.name }}.tar.gz
   #       path: build/_package/${{ matrix.name }}/webrtc.tar.gz
@@ -97,7 +97,7 @@ jobs:
           - android_prefixed
     runs-on: buildjet-4vcpu-ubuntu-2204
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - name: Disk Cleanup
       run: |
         df -h
@@ -125,14 +125,12 @@ jobs:
     steps:
     - name: Create Release
       id: create_release
-      uses: actions/create-release@v1.0.0
+      uses: elgohr/Github-Release-Action@v5
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: ${{ github.ref }}
-        release_name: Release ${{ github.ref }}
-        draft: false
-        prerelease: false
+        tag: ${{ github.ref }}
+        title: Release ${{ github.ref }}
     - name: Output upload url
       shell: bash
       run: echo "UPLOAD_URL='${{ steps.create_release.outputs.upload_url }}'" > create-release.env
@@ -166,12 +164,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
     - name: Download ${{ matrix.name }}
-      uses: actions/download-artifact@v1
+      uses: actions/download-artifact@v4
       with:
         name: webrtc.${{ matrix.name }}.tar.gz
-    - uses: actions/download-artifact@v1
+    - uses: actions/download-artifact@v4
       with:
         name: create-release.env
     - name: Env to output
@@ -205,12 +203,12 @@ jobs:
   #   runs-on: ubuntu-latest
   #   steps:
   #   - name: Checkout code
-  #     uses: actions/checkout@v2
+  #     uses: actions/checkout@v4
   #   - name: Download ${{ matrix.name }}
-  #     uses: actions/download-artifact@v1
+  #     uses: actions/download-artifact@v4
   #     with:
   #       name: webrtc.${{ matrix.name }}.zip
-  #   - uses: actions/download-artifact@v1
+  #   - uses: actions/download-artifact@v4
   #     with:
   #       name: create-release.env
   #   - name: Env to output
