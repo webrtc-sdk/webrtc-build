@@ -543,7 +543,7 @@ def build_webrtc_ios(
             ]
             gn_gen(webrtc_src_dir, work_dir, gn_args, extra_gn_args)
         if not nobuild:
-            cmd(['ninja', '-C', work_dir, *get_build_targets('ios')])
+            cmd(['autoninja', '-C', work_dir, *get_build_targets('ios')])
             ar = '/usr/bin/ar'
             archive_objects(ar, os.path.join(work_dir, 'obj'), os.path.join(work_dir, 'libwebrtc.a'))
         if test:
@@ -627,7 +627,7 @@ def build_webrtc_android(
             ]
             gn_gen(webrtc_src_dir, work_dir, gn_args, extra_gn_args)
         if not nobuild:
-            cmd(['ninja', '-C', work_dir, *get_build_targets('android')])
+            cmd(['autoninja', '-C', work_dir, *get_build_targets('android')])
             ar = os.path.join(webrtc_src_dir, 'third_party/llvm-build/Release+Asserts/bin/llvm-ar')
             archive_objects(ar, os.path.join(work_dir, 'obj'), os.path.join(work_dir, 'libwebrtc.a'))
         if test:
@@ -719,7 +719,7 @@ def build_webrtc(
     if nobuild:
         return
 
-    cmd(['ninja', '-C', webrtc_build_dir, *get_build_targets(target)])
+    cmd(['autoninja', '-C', webrtc_build_dir, *get_build_targets(target)])
 
     if test:
         cmd(['autoninja', '-C', webrtc_build_dir, 'rtc_unittests'])
