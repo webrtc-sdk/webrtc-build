@@ -397,7 +397,7 @@ WEBRTC_BUILD_TARGETS_MACOS_COMMON = [
     'api/task_queue:default_task_queue_factory',
     'sdk:native_api',
     'sdk:default_codec_factory_objc',
-    'pc:peerconnection',
+    'pc:peer_connection',
     'sdk:videocapture_objc',
 ]
 WEBRTC_BUILD_TARGETS = {
@@ -526,7 +526,7 @@ def build_webrtc_ios(
         with cd(os.path.join(webrtc_src_dir, 'tools_webrtc', 'ios')):
             ios_deployment_target = cmdcap(
                 ['python3', '-c',
-                 f'from build_ios_libs import IOS_DEPLOYMENT_TARGET; print(IOS_DEPLOYMENT_TARGET["{device}"])'])
+                 f'from build_ios_libs import IOS_MINIMUM_DEPLOYMENT_TARGET; print(IOS_MINIMUM_DEPLOYMENT_TARGET["{device}"])'])
 
         if not os.path.exists(os.path.join(work_dir, 'args.gn')) or gen or overlap_build_dir:
             gn_args = [

@@ -73,11 +73,11 @@ jobs:
         xcode-version: 16.4
     - run: brew install ninja
     - run: ./build.${{ matrix.name }}.sh "${{ github.event.inputs.commitHash }}"
-    # - name: Upload Artifact
-    #   uses: actions/upload-artifact@v4
-    #   with:
-    #     name: webrtc.${{ matrix.name }}.tar.gz
-    #     path: build/_package/${{ matrix.name }}/webrtc.tar.gz
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: webrtc.${{ matrix.name }}.tar.gz
+        path: build/_package/${{ matrix.name }}/webrtc.tar.gz
   build-linux:
     defaults:
       run:
