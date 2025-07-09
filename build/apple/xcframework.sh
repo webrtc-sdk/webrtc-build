@@ -136,13 +136,12 @@ cp $SOURCE_DIR/LICENSE $OUT_DIR/$FRAMEWORK_NAME.xcframework/
 cd $OUT_DIR/$FRAMEWORK_NAME.xcframework/macos-arm64_x86_64/$FRAMEWORK_NAME.framework/
 mv $FRAMEWORK_NAME Versions/A/$FRAMEWORK_NAME
 ln -s Versions/Current/$FRAMEWORK_NAME $FRAMEWORK_NAME
-cd ../../../../
 
 cd $OUT_DIR/$FRAMEWORK_NAME.xcframework/ios-arm64_x86_64-maccatalyst/$FRAMEWORK_NAME.framework/
 mv $FRAMEWORK_NAME Versions/A/$FRAMEWORK_NAME
 ln -s Versions/Current/$FRAMEWORK_NAME $FRAMEWORK_NAME
-cd ../../../
 
+cd $OUT_DIR
 zip --symlinks -9 -r $FRAMEWORK_NAME.xcframework.zip $FRAMEWORK_NAME.xcframework
 
 end_group
