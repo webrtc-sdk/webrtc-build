@@ -64,7 +64,7 @@ jobs:
         name:
           - apple
           - apple_prefixed
-    runs-on: macos-15
+    runs-on: macos-15-xlarge
     steps:
     - uses: actions/checkout@v4
     - uses: maxim-lobanov/setup-xcode@v1
