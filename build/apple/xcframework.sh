@@ -1,13 +1,16 @@
 #!/bin/sh
+
+set -e
+
 if [ ! -n "$1" ]; then
   echo "Usage: $0 'debug' | 'release' 'source_dir' 'out_dir' ['prefix']"
   exit 0
 fi
 
-MODE=$1
-SOURCE_DIR=$2
-OUT_DIR=$3
-PREFIX=${4:-""}
+MODE="$1"
+SOURCE_DIR="$(realpath "$2")"
+OUT_DIR="$(realpath "$3")"
+PREFIX="${4:-""}"
 
 if [ -z "$PREFIX" ]; then
   FRAMEWORK_NAME="WebRTC"
@@ -67,7 +70,7 @@ PLATFORMS=(
   # "xrOS-arm64-simulator:target_os=\"ios\" target_environment=\"xrsimulator\" target_cpu=\"arm64\" ios_deployment_target=\"2.2.0\""
 )
 
-cd $SOURCE_DIR
+cd "$SOURCE_DIR"
 
 end_group
 
@@ -77,7 +80,7 @@ for platform_config in "${PLATFORMS[@]}"; do
   
   start_group "Building $platform"
   
-  gn gen $OUT_DIR/$platform --args="$COMMON_ARGS $config" --ide=xcode
+  gn gen "$OUT_DIR/$platform" --args="$COMMON_ARGS $config" --ide=xcode
   
   if [[ $platform == *"macOS"* ]]; then
     build_target="mac_framework_bundle"
@@ -85,7 +88,7 @@ for platform_config in "${PLATFORMS[@]}"; do
     build_target="ios_framework_bundle"
   fi
   
-  ninja -C $OUT_DIR/$platform $build_target -j 10 --quiet
+  ninja -C "$OUT_DIR/$platform" "$build_target" -j 10 --quiet
   if [ $? -ne 0 ]; then
     exit 1
   fi
@@ -94,51 +97,49 @@ done
 
 start_group "Creating universal binaries (x64 + arm64)"
 
-rm -rf $OUT_DIR/*-lib $OUT_DIR/$FRAMEWORK_NAME.*
+# mkdir -p "$OUT_DIR/macOS-lib"
+# cp -R "$OUT_DIR/macOS-x64/$FRAMEWORK_NAME.framework" "$OUT_DIR/macOS-lib/$FRAMEWORK_NAME.framework"
+# lipo -create -output "$OUT_DIR/macOS-lib/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME" "$OUT_DIR/macOS-arm64/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME" "$OUT_DIR/macOS-x64/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME"
 
-# mkdir -p $OUT_DIR/macOS-lib
-# cp -R $OUT_DIR/macOS-x64/$FRAMEWORK_NAME.framework $OUT_DIR/macOS-lib/$FRAMEWORK_NAME.framework
-# lipo -create -output $OUT_DIR/macOS-lib/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME $OUT_DIR/macOS-arm64/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME $OUT_DIR/macOS-x64/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME
+# mkdir -p "$OUT_DIR/catalyst-lib"
+# cp -R "$OUT_DIR/catalyst-arm64/$FRAMEWORK_NAME.framework" "$OUT_DIR/catalyst-lib/$FRAMEWORK_NAME.framework"
+# lipo -create -output "$OUT_DIR/catalyst-lib/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME" "$OUT_DIR/catalyst-arm64/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME" "$OUT_DIR/catalyst-x64/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME"
 
-# mkdir -p $OUT_DIR/catalyst-lib
-# cp -R $OUT_DIR/catalyst-arm64/$FRAMEWORK_NAME.framework $OUT_DIR/catalyst-lib/$FRAMEWORK_NAME.framework
-# lipo -create -output $OUT_DIR/catalyst-lib/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME $OUT_DIR/catalyst-arm64/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME $OUT_DIR/catalyst-x64/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME
+mkdir -p "$OUT_DIR/iOS-device-lib"
+cp -R "$OUT_DIR/iOS-arm64-device/$FRAMEWORK_NAME.framework" "$OUT_DIR/iOS-device-lib/$FRAMEWORK_NAME.framework"
+lipo -create -output "$OUT_DIR/iOS-device-lib/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME" "$OUT_DIR/iOS-arm64-device/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME"
 
-mkdir -p $OUT_DIR/iOS-device-lib
-cp -R $OUT_DIR/iOS-arm64-device/$FRAMEWORK_NAME.framework $OUT_DIR/iOS-device-lib/$FRAMEWORK_NAME.framework
-lipo -create -output $OUT_DIR/iOS-device-lib/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME $OUT_DIR/iOS-arm64-device/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME
-
-# mkdir -p $OUT_DIR/iOS-simulator-lib
-# cp -R $OUT_DIR/iOS-arm64-simulator/$FRAMEWORK_NAME.framework $OUT_DIR/iOS-simulator-lib/$FRAMEWORK_NAME.framework
-# lipo -create -output $OUT_DIR/iOS-simulator-lib/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME $OUT_DIR/iOS-arm64-simulator/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME $OUT_DIR/iOS-x64-simulator/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME
+# mkdir -p "$OUT_DIR/iOS-simulator-lib"
+# cp -R "$OUT_DIR/iOS-arm64-simulator/$FRAMEWORK_NAME.framework" "$OUT_DIR/iOS-simulator-lib/$FRAMEWORK_NAME.framework"
+# lipo -create -output "$OUT_DIR/iOS-simulator-lib/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME" "$OUT_DIR/iOS-arm64-simulator/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME" "$OUT_DIR/iOS-x64-simulator/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME"
 
 end_group
 
 start_group "Creating XCFramework"
 
 xcodebuild -create-xcframework \
-  -framework $OUT_DIR/iOS-device-lib/$FRAMEWORK_NAME.framework \
-  -output $OUT_DIR/$FRAMEWORK_NAME.xcframework
+  -framework "$OUT_DIR/iOS-device-lib/$FRAMEWORK_NAME.framework" \
+  -output "$OUT_DIR/$FRAMEWORK_NAME.xcframework"
 
 end_group
 
 start_group "Post-processing XCFramework"
 
-cp $SOURCE_DIR/LICENSE $OUT_DIR/$FRAMEWORK_NAME.xcframework/
+cp LICENSE "$OUT_DIR/$FRAMEWORK_NAME.xcframework/"
 
-# cd $OUT_DIR/$FRAMEWORK_NAME.xcframework/macos-arm64_x86_64/$FRAMEWORK_NAME.framework/
-# mv $FRAMEWORK_NAME Versions/A/$FRAMEWORK_NAME
-# ln -s Versions/Current/$FRAMEWORK_NAME $FRAMEWORK_NAME
+# cd "$OUT_DIR/$FRAMEWORK_NAME.xcframework/macos-arm64_x86_64/$FRAMEWORK_NAME.framework/"
+# mv "$FRAMEWORK_NAME" "Versions/A/$FRAMEWORK_NAME"
+# ln -s "Versions/Current/$FRAMEWORK_NAME" "$FRAMEWORK_NAME"
 
-# cd $OUT_DIR/$FRAMEWORK_NAME.xcframework/ios-arm64_x86_64-maccatalyst/$FRAMEWORK_NAME.framework/
-# mv $FRAMEWORK_NAME Versions/A/$FRAMEWORK_NAME
-# ln -s Versions/Current/$FRAMEWORK_NAME $FRAMEWORK_NAME
+# cd "$OUT_DIR/$FRAMEWORK_NAME.xcframework/ios-arm64_x86_64-maccatalyst/$FRAMEWORK_NAME.framework/"
+# mv "$FRAMEWORK_NAME" "Versions/A/$FRAMEWORK_NAME"
+# ln -s "Versions/Current/$FRAMEWORK_NAME" "$FRAMEWORK_NAME"
 
-cd $OUT_DIR
-zip --symlinks -9 -r $FRAMEWORK_NAME.xcframework.zip $FRAMEWORK_NAME.xcframework
+cd "$OUT_DIR"
+zip --symlinks -9 -r "$FRAMEWORK_NAME.xcframework.zip" "$FRAMEWORK_NAME.xcframework"
 
 end_group
 
 if [ "$CI" = "true" ]; then
-  echo "framework_name=$FRAMEWORK_NAME" >> $GITHUB_OUTPUT
+  echo "framework_name=$FRAMEWORK_NAME" >> "$GITHUB_OUTPUT"
 fi
