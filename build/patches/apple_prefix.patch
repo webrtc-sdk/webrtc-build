@@ -1,0 +1,119 @@
+diff --git forkSrcPrefix/sdk/objc/Info.plist forkDstPrefix/sdk/objc/Info.plist
+index 38c437e7feda9bfa1ee8aafb864174af1c891913..814989d53484f2b009f08ccfd2c6d0ad60e6f5ce 100644
+--- forkSrcPrefix/sdk/objc/Info.plist
++++ forkDstPrefix/sdk/objc/Info.plist
+@@ -5,13 +5,13 @@
+ 	<key>CFBundleDevelopmentRegion</key>
+ 	<string>en</string>
+ 	<key>CFBundleExecutable</key>
+-	<string>WebRTC</string>
++	<string>LiveKitWebRTC</string>
+ 	<key>CFBundleIdentifier</key>
+-	<string>org.webrtc.WebRTC</string>
++	<string>io.livekit.LiveKitWebRTC</string>
+ 	<key>CFBundleInfoDictionaryVersion</key>
+ 	<string>6.0</string>
+ 	<key>CFBundleName</key>
+-	<string>WebRTC</string>
++	<string>LiveKitWebRTC</string>
+ 	<key>CFBundlePackageType</key>
+ 	<string>FMWK</string>
+ 	<key>CFBundleShortVersionString</key>
+diff --git forkSrcPrefix/tools_webrtc/apple/copy_framework_header.py forkDstPrefix/tools_webrtc/apple/copy_framework_header.py
+index 3574a67d2a243d4f95217b0a9e855f08b437c739..a68f22d887cbf798c4546ef4937fab75fd03e8ba 100755
+--- forkSrcPrefix/tools_webrtc/apple/copy_framework_header.py
++++ forkDstPrefix/tools_webrtc/apple/copy_framework_header.py
+@@ -20,7 +20,7 @@ def _ReplaceDoubleQuote(line):
+   if not match:
+     return line
+ 
+-  return '%s#import <WebRTC/%sRTC%s.h>%s' % (match.group(1), match.group(3),
++  return '%s#import <LiveKitWebRTC/%sRTC%s.h>%s' % (match.group(1), match.group(3),
+                                              match.group(4), match.group(5))
+ 
+ 
+diff --git forkSrcPrefix/sdk/BUILD.gn forkDstPrefix/sdk/BUILD.gn
+index a710d600d671a97b355467269907c1cde4c50e0c..3af067c7929640b5afc443eefd95152315d90286 100644
+--- forkSrcPrefix/sdk/BUILD.gn
++++ forkDstPrefix/sdk/BUILD.gn
+@@ -1409,7 +1409,7 @@ if (is_ios || is_mac) {
+     if (is_ios) {
+       apple_framework_bundle_with_umbrella_header("framework_objc") {
+         info_plist = "objc/Info.plist"
+-        output_name = "WebRTC"
++        output_name = "LiveKitWebRTC"
+ 
+         common_objc_headers = [
+           "objc/base/RTCCodecSpecificInfo.h",
+@@ -1579,7 +1579,7 @@ if (is_ios || is_mac) {
+ 
+       bundle_data("ios_framework_bundle") {
+         deps = [ "../sdk:framework_objc" ]
+-        sources = [ "$root_build_dir/WebRTC.framework" ]
++        sources = [ "$root_build_dir/LiveKitWebRTC.framework" ]
+         outputs = [ "{{bundle_resources_dir}}/Frameworks/{{source_file_part}}" ]
+       }
+     }
+@@ -1587,7 +1587,7 @@ if (is_ios || is_mac) {
+     if (is_mac) {
+       apple_framework_bundle_with_umbrella_header("mac_framework_objc") {
+         info_plist = "objc/Info.plist"
+-        output_name = "WebRTC"
++        output_name = "LiveKitWebRTC"
+ 
+         sources = [
+           "objc/api/peerconnection/RTCAudioDeviceModule.h",
+@@ -1735,7 +1735,7 @@ if (is_ios || is_mac) {
+ 
+       bundle_data("mac_framework_bundle") {
+         deps = [ "../sdk:mac_framework_objc" ]
+-        sources = [ "$root_build_dir/WebRTC.framework" ]
++        sources = [ "$root_build_dir/LiveKitWebRTC.framework" ]
+         outputs = [ "{{bundle_contents_dir}}/Frameworks/{{source_file_part}}" ]
+       }
+     }
+diff --git forkSrcPrefix/tools_webrtc/ios/generate_umbrella_header.py forkDstPrefix/tools_webrtc/ios/generate_umbrella_header.py
+index 1fd1eed38eedd64b11302c962d24c0cb0f60dc99..055732e044d61af98bec7c71949c18f84c54ea79 100644
+--- forkSrcPrefix/tools_webrtc/ios/generate_umbrella_header.py
++++ forkDstPrefix/tools_webrtc/ios/generate_umbrella_header.py
+@@ -41,7 +41,7 @@ def GenerateUmbrellaHeader():
+      */\n\n""" % datetime.datetime.now().year))
+ 
+     for s in args.sources:
+-      outfile.write("#import <WebRTC/{}>\n".format(os.path.basename(s)))
++      outfile.write("#import <LiveKitWebRTC/{}>\n".format(os.path.basename(s)))
+ 
+   return 0
+ 
+diff --git forkSrcPrefix/sdk/objc/base/RTCMacros.h forkDstPrefix/sdk/objc/base/RTCMacros.h
+index 09418b86ac77a1a1dc8672775ce05bca0061377d..16399cb0133f79ec0103b38693451cbceb0d52bc 100644
+--- forkSrcPrefix/sdk/objc/base/RTCMacros.h
++++ forkDstPrefix/sdk/objc/base/RTCMacros.h
+@@ -40,9 +40,7 @@
+ // problem.
+ //
+ // This macro must be defined uniformily across all the translation units.
+-#ifndef RTC_OBJC_TYPE_PREFIX
+-#define RTC_OBJC_TYPE_PREFIX
+-#endif
++#define RTC_OBJC_TYPE_PREFIX LK
+ 
+ #ifndef RTC_CONSTANT_TYPE_PREFIX
+ #define RTC_CONSTANT_TYPE_PREFIX k
+diff --git forkSrcPrefix/tools_webrtc/ios/build_ios_libs.py forkDstPrefix/tools_webrtc/ios/build_ios_libs.py
+index 50c9398e1739dd765f02e097e7d04544a70221bd..53dc1b12d775b348a40acbf35242a719ec731dc4 100755
+--- forkSrcPrefix/tools_webrtc/ios/build_ios_libs.py
++++ forkDstPrefix/tools_webrtc/ios/build_ios_libs.py
+@@ -27,9 +27,9 @@ sys.path.append(os.path.join(SRC_DIR, 'build'))
+ import find_depot_tools
+ 
+ SDK_OUTPUT_DIR = os.path.join(SRC_DIR, 'out_ios_libs')
+-SDK_FRAMEWORK_NAME = 'WebRTC.framework'
+-SDK_DSYM_NAME = 'WebRTC.dSYM'
+-SDK_XCFRAMEWORK_NAME = 'WebRTC.xcframework'
++SDK_FRAMEWORK_NAME = 'LiveKitWebRTC.framework'
++SDK_DSYM_NAME = 'LiveKitWebRTC.dSYM'
++SDK_XCFRAMEWORK_NAME = 'LiveKitWebRTC.xcframework'
+ 
+ ENABLED_ARCHS = [
+     'device:arm64', 'simulator:arm64', 'simulator:x64',

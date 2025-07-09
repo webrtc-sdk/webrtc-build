@@ -177,6 +177,10 @@ PATCH_INFO = {
 }
 
 PATCHES = {
+    'apple': [],
+    'apple_prefixed': [
+        'apple_prefix.patch',
+    ],
     'windows_x86_64': [
         'add_license_dav1d.patch',
         'windows_add_deps.patch',
@@ -940,6 +944,8 @@ TARGETS = [
     'android',
     'android_prefixed',
     'ios',
+    'apple',
+    'apple_prefixed'
 ]
 
 
@@ -951,7 +957,7 @@ def check_target(target):
         return target in ['windows_x86_64', 'windows_arm64']
     elif platform.system() == 'Darwin':
         logging.info(f'OS: {platform.system()}')
-        return target in ('macos_x86_64', 'macos_arm64', 'ios')
+        return target in ('macos_x86_64', 'macos_arm64', 'ios', 'apple', 'apple_prefixed')
     elif platform.system() == 'Linux':
         release = read_version_file('/etc/os-release')
         os = release['NAME']
@@ -1161,6 +1167,8 @@ def main():
                                  overlap_build_dir=args.webrtc_overlap_ios_build_dir)
             elif args.target in ['android', 'android_prefixed']:
                 build_webrtc_android(**build_webrtc_args, nobuild_aar=args.webrtc_nobuild_android_aar)
+            elif args.target in ['apple', 'apple_prefixed']:
+                pass
             else:
                 build_webrtc(**build_webrtc_args, target=args.target)
 

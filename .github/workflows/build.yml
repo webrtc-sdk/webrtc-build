@@ -62,9 +62,8 @@ jobs:
       fail-fast: false
       matrix:
         name:
-          - macos_arm64
-          - macos_x86_64
-          - ios
+          - apple
+          - apple_prefixed
     runs-on: macos-15
     steps:
     - uses: actions/checkout@v4
@@ -76,8 +75,8 @@ jobs:
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: webrtc.${{ matrix.name }}.tar.gz
-        path: build/_package/${{ matrix.name }}/webrtc.tar.gz
+        name: ${{ matrix.name == 'apple_prefixed' && 'LiveKitWebRTC.xcframework.zip' || 'WebRTC.xcframework.zip' }}
+        path: build/_package/${{ matrix.name }}/*.xcframework.zip
   build-linux:
     defaults:
       run:
