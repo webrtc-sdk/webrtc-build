@@ -131,7 +131,7 @@ end_group
 
 start_group "Post-processing XCFramework"
 
-cp ./src/LICENSE $OUT_DIR/$FRAMEWORK_NAME.xcframework/
+cp $SOURCE_DIR/LICENSE $OUT_DIR/$FRAMEWORK_NAME.xcframework/
 
 cd $OUT_DIR/$FRAMEWORK_NAME.xcframework/macos-arm64_x86_64/$FRAMEWORK_NAME.framework/
 mv $FRAMEWORK_NAME Versions/A/$FRAMEWORK_NAME
@@ -147,9 +147,6 @@ zip --symlinks -9 -r $FRAMEWORK_NAME.xcframework.zip $FRAMEWORK_NAME.xcframework
 
 end_group
 
-start_group "Checksum"
-
-shasum -a 256 $FRAMEWORK_NAME.xcframework.zip >$FRAMEWORK_NAME.xcframework.zip.shasum
-cat $FRAMEWORK_NAME.xcframework.zip.shasum
-
-end_group
+if [ "$CI" = "true" ]; then
+  echo "framework_name=$FRAMEWORK_NAME" >> $GITHUB_OUTPUT
+fi

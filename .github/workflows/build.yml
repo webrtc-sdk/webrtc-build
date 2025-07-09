@@ -70,13 +70,14 @@ jobs:
     - uses: maxim-lobanov/setup-xcode@v1
       with:
         xcode-version: 16.4
-    - run: brew install ninja
-    - run: ./build.${{ matrix.name }}.sh "${{ github.event.inputs.commitHash }}"
+    - name: Build
+      id: build
+      run: ./build.${{ matrix.name }}.sh "${{ github.event.inputs.commitHash }}"
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ matrix.name == 'apple_prefixed' && 'LiveKitWebRTC.xcframework.zip' || 'WebRTC.xcframework.zip' }}
-        path: build/_package/${{ matrix.name }}/*.xcframework.zip
+        name: ${{ steps.build.outputs.framework_name }}.xcframework.zip
+        path: build/_package/${{ matrix.name }}/${{ steps.build.outputs.framework_name }}.xcframework.zip
   build-linux:
     defaults:
       run:
