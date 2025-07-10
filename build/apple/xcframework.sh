@@ -1,8 +1,8 @@
-#!/bin/sh
+#!/bin/bash
 
 set -e
 
-if [ ! -n "$1" ]; then
+if [[ -z "$1" ]]; then
   echo "Usage: $0 'debug' | 'release' 'source_dir' 'out_dir' ['prefix']"
   exit 0
 fi
@@ -19,14 +19,16 @@ else
 fi
 
 DEBUG="false"
-if [ "$MODE" == "debug" ]; then
+if [[ "$MODE" == "debug" ]]; then
   DEBUG="true"
 fi
+
+PARALLEL_BUILDS=6
 
 echo "xcframework.sh: MODE=$MODE, DEBUG=$DEBUG, SOURCE_DIR=$SOURCE_DIR, OUT_DIR=$OUT_DIR, PREFIX=$PREFIX, FRAMEWORK_NAME=$FRAMEWORK_NAME"
 
 start_group() {
-  if [ "$CI" = "true" ]; then
+  if [[ "$CI" == "true" ]]; then
     echo "::group::$1"
   else
     echo "=== $1 ==="
@@ -34,7 +36,7 @@ start_group() {
 }
 
 end_group() {
-  if [ "$CI" = "true" ]; then
+  if [[ "$CI" == "true" ]]; then
     echo "::endgroup::"
   fi
 }
@@ -88,10 +90,7 @@ for platform_config in "${PLATFORMS[@]}"; do
     build_target="ios_framework_bundle"
   fi
   
-  ninja -C "$OUT_DIR/$platform" "$build_target" -j 10 --quiet
-  if [ $? -ne 0 ]; then
-    exit 1
-  fi
+  ninja -C "$OUT_DIR/$platform" "$build_target" -j $PARALLEL_BUILDS --quiet || exit 1
   end_group
 done
 
@@ -147,6 +146,6 @@ zip --symlinks -9 -r "$FRAMEWORK_NAME.xcframework.zip" "$FRAMEWORK_NAME.xcframew
 
 end_group
 
-if [ "$CI" = "true" ]; then
+if [[ "$CI" == "true" ]]; then
   echo "framework_name=$FRAMEWORK_NAME" >> "$GITHUB_OUTPUT"
 fi
