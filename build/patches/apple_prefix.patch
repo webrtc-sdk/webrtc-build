@@ -1,37 +1,23 @@
-diff --git forkSrcPrefix/sdk/objc/Info.plist forkDstPrefix/sdk/objc/Info.plist
-index 38c437e7feda9bfa1ee8aafb864174af1c891913..814989d53484f2b009f08ccfd2c6d0ad60e6f5ce 100644
---- forkSrcPrefix/sdk/objc/Info.plist
-+++ forkDstPrefix/sdk/objc/Info.plist
-@@ -5,13 +5,13 @@
- 	<key>CFBundleDevelopmentRegion</key>
- 	<string>en</string>
- 	<key>CFBundleExecutable</key>
--	<string>WebRTC</string>
-+	<string>LiveKitWebRTC</string>
- 	<key>CFBundleIdentifier</key>
--	<string>org.webrtc.WebRTC</string>
-+	<string>io.livekit.LiveKitWebRTC</string>
- 	<key>CFBundleInfoDictionaryVersion</key>
- 	<string>6.0</string>
- 	<key>CFBundleName</key>
--	<string>WebRTC</string>
-+	<string>LiveKitWebRTC</string>
- 	<key>CFBundlePackageType</key>
- 	<string>FMWK</string>
- 	<key>CFBundleShortVersionString</key>
-diff --git forkSrcPrefix/tools_webrtc/apple/copy_framework_header.py forkDstPrefix/tools_webrtc/apple/copy_framework_header.py
-index 3574a67d2a243d4f95217b0a9e855f08b437c739..a68f22d887cbf798c4546ef4937fab75fd03e8ba 100755
---- forkSrcPrefix/tools_webrtc/apple/copy_framework_header.py
-+++ forkDstPrefix/tools_webrtc/apple/copy_framework_header.py
-@@ -20,7 +20,7 @@ def _ReplaceDoubleQuote(line):
-   if not match:
-     return line
+diff --git forkSrcPrefix/sdk/objc/base/RTCMacros.h forkDstPrefix/sdk/objc/base/RTCMacros.h
+index 09418b86ac77a1a1dc8672775ce05bca0061377d..269e8acd718e51c65fba57304bee03ce6d94db80 100644
+--- forkSrcPrefix/sdk/objc/base/RTCMacros.h
++++ forkDstPrefix/sdk/objc/base/RTCMacros.h
+@@ -40,13 +40,9 @@
+ // problem.
+ //
+ // This macro must be defined uniformily across all the translation units.
+-#ifndef RTC_OBJC_TYPE_PREFIX
+-#define RTC_OBJC_TYPE_PREFIX
+-#endif
++#define RTC_OBJC_TYPE_PREFIX LK
  
--  return '%s#import <WebRTC/%sRTC%s.h>%s' % (match.group(1), match.group(3),
-+  return '%s#import <LiveKitWebRTC/%sRTC%s.h>%s' % (match.group(1), match.group(3),
-                                              match.group(4), match.group(5))
+-#ifndef RTC_CONSTANT_TYPE_PREFIX
+-#define RTC_CONSTANT_TYPE_PREFIX k
+-#endif
++#define RTC_CONSTANT_TYPE_PREFIX kLK
  
- 
+ // RCT_OBJC_TYPE
+ //
 diff --git forkSrcPrefix/sdk/BUILD.gn forkDstPrefix/sdk/BUILD.gn
 index a710d600d671a97b355467269907c1cde4c50e0c..3af067c7929640b5afc443eefd95152315d90286 100644
 --- forkSrcPrefix/sdk/BUILD.gn
@@ -85,21 +71,40 @@ index 1fd1eed38eedd64b11302c962d24c0cb0f60dc99..055732e044d61af98bec7c71949c18f8
  
    return 0
  
-diff --git forkSrcPrefix/sdk/objc/base/RTCMacros.h forkDstPrefix/sdk/objc/base/RTCMacros.h
-index 09418b86ac77a1a1dc8672775ce05bca0061377d..16399cb0133f79ec0103b38693451cbceb0d52bc 100644
---- forkSrcPrefix/sdk/objc/base/RTCMacros.h
-+++ forkDstPrefix/sdk/objc/base/RTCMacros.h
-@@ -40,9 +40,7 @@
- // problem.
- //
- // This macro must be defined uniformily across all the translation units.
--#ifndef RTC_OBJC_TYPE_PREFIX
--#define RTC_OBJC_TYPE_PREFIX
--#endif
-+#define RTC_OBJC_TYPE_PREFIX LK
+diff --git forkSrcPrefix/tools_webrtc/apple/copy_framework_header.py forkDstPrefix/tools_webrtc/apple/copy_framework_header.py
+index 3574a67d2a243d4f95217b0a9e855f08b437c739..a68f22d887cbf798c4546ef4937fab75fd03e8ba 100755
+--- forkSrcPrefix/tools_webrtc/apple/copy_framework_header.py
++++ forkDstPrefix/tools_webrtc/apple/copy_framework_header.py
+@@ -20,7 +20,7 @@ def _ReplaceDoubleQuote(line):
+   if not match:
+     return line
  
- #ifndef RTC_CONSTANT_TYPE_PREFIX
- #define RTC_CONSTANT_TYPE_PREFIX k
+-  return '%s#import <WebRTC/%sRTC%s.h>%s' % (match.group(1), match.group(3),
++  return '%s#import <LiveKitWebRTC/%sRTC%s.h>%s' % (match.group(1), match.group(3),
+                                              match.group(4), match.group(5))
+ 
+ 
+diff --git forkSrcPrefix/sdk/objc/Info.plist forkDstPrefix/sdk/objc/Info.plist
+index 38c437e7feda9bfa1ee8aafb864174af1c891913..814989d53484f2b009f08ccfd2c6d0ad60e6f5ce 100644
+--- forkSrcPrefix/sdk/objc/Info.plist
++++ forkDstPrefix/sdk/objc/Info.plist
+@@ -5,13 +5,13 @@
+ 	<key>CFBundleDevelopmentRegion</key>
+ 	<string>en</string>
+ 	<key>CFBundleExecutable</key>
+-	<string>WebRTC</string>
++	<string>LiveKitWebRTC</string>
+ 	<key>CFBundleIdentifier</key>
+-	<string>org.webrtc.WebRTC</string>
++	<string>io.livekit.LiveKitWebRTC</string>
+ 	<key>CFBundleInfoDictionaryVersion</key>
+ 	<string>6.0</string>
+ 	<key>CFBundleName</key>
+-	<string>WebRTC</string>
++	<string>LiveKitWebRTC</string>
+ 	<key>CFBundlePackageType</key>
+ 	<string>FMWK</string>
+ 	<key>CFBundleShortVersionString</key>
 diff --git forkSrcPrefix/tools_webrtc/ios/build_ios_libs.py forkDstPrefix/tools_webrtc/ios/build_ios_libs.py
 index 50c9398e1739dd765f02e097e7d04544a70221bd..53dc1b12d775b348a40acbf35242a719ec731dc4 100755
 --- forkSrcPrefix/tools_webrtc/ios/build_ios_libs.py
