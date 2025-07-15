@@ -42,21 +42,21 @@ end_group() {
 }
 
 COMMON_ARGS="
-      treat_warnings_as_errors = false
+      enable_dsyms = $DEBUG
+      enable_libaom = true
+      enable_stripping = true
       ios_enable_code_signing = false
       is_component_build = false
-      rtc_enable_symbol_export = true
-      rtc_libvpx_build_vp9 = true
-      rtc_include_tests = false
-      rtc_build_examples = false
-      rtc_use_h264 = false
-      rtc_enable_protobuf = false
-      enable_libaom = true
-      rtc_include_dav1d_in_internal_decoder_factory = true
-      use_rtti = true
       is_debug = $DEBUG
-      enable_dsyms = $DEBUG
-      enable_stripping = true"
+      rtc_build_examples = false
+      rtc_enable_protobuf = false
+      rtc_enable_symbol_export = true
+      rtc_include_dav1d_in_internal_decoder_factory = true
+      rtc_include_tests = false
+      rtc_libvpx_build_vp9 = true
+      rtc_use_h264 = false
+      treat_warnings_as_errors = true
+      use_rtti = true"
 
 PLATFORMS=(
   "iOS-arm64-device:target_os=\"ios\" target_environment=\"device\" target_cpu=\"arm64\" ios_deployment_target=\"13.0\""
