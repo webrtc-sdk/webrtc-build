@@ -120,7 +120,7 @@ jobs:
     if: contains(github.ref, 'tags/m')
     needs:
       # - build-windows
-      # - build-macos
+      - build-apple
       - build-linux
     runs-on: ubuntu-20.04
     steps:
@@ -188,6 +188,41 @@ jobs:
         asset_path: webrtc.${{ matrix.name }}.tar.gz/webrtc.tar.gz
         asset_name: webrtc.${{ matrix.name }}.tar.gz
         asset_content_type: application/gzip
+  upload-assets-apple:
+    strategy:
+      fail-fast: false
+      matrix:
+        name:
+          - WebRTC.xcframework
+          - LiveKitWebRTC.xcframework
+    name: Release ${{ matrix.name }}
+    if: contains(github.ref, 'tags/m')
+    needs:
+      - create-release
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download ${{ matrix.name }}
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ matrix.name }}
+    - uses: actions/download-artifact@v4
+      with:
+        name: create-release.env
+    - name: Env to output
+      shell: bash
+      run: |
+        source create-release.env/create-release.env
+        echo "upload_url=$UPLOAD_URL" >> "$GITHUB_OUTPUT"
+      id: env
+    - name: Upload ${{ matrix.name }} Release Asset
+      uses: actions/upload-release-asset@v1.0.1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.env.outputs.upload_url }}
+        asset_path: ${{ matrix.name }}.zip
+        asset_name: ${{ matrix.name }}
+        asset_content_type: application/zip
   # Windows だけ Content-Type が違うので別で記述する
   # Windows has a different Content-Type, so handle it separately.
   # upload-assets-windows:
