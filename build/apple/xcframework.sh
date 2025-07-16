@@ -141,8 +141,8 @@ cd "$OUT_DIR/$FRAMEWORK_NAME.xcframework/ios-arm64_x86_64-maccatalyst/$FRAMEWORK
 mv "$FRAMEWORK_NAME" "Versions/A/$FRAMEWORK_NAME"
 ln -s "Versions/Current/$FRAMEWORK_NAME" "$FRAMEWORK_NAME"
 
-# cd "$OUT_DIR"
-# zip --symlinks -9 -r "$FRAMEWORK_NAME.xcframework.zip" "$FRAMEWORK_NAME.xcframework"
+cd "$OUT_DIR"
+zip --symlinks -9 -r "$FRAMEWORK_NAME.xcframework.zip" "$FRAMEWORK_NAME.xcframework"
 
 end_group
 
