@@ -177,6 +177,10 @@ PATCH_INFO = {
 }
 
 PATCHES = {
+    'apple': [],
+    'apple_prefixed': [
+        'apple_prefix.patch',
+    ],
     'windows_x86_64': [
         'add_license_dav1d.patch',
         'windows_add_deps.patch',
@@ -292,7 +296,7 @@ def get_webrtc(source_dir, patch_dir, version, target,
             else:
                 cmd(['git', 'checkout', '-f', version])
             cmd(['git', 'clean', '-df'])
-            cmd(['gclient', 'sync', '-D', '--force', '--reset', '--with_branch_heads'])
+            cmd(['gclient', 'sync', '-D', '--force', '--reset', '--with_branch_heads', '--jobs=8'])
             for patch in PATCHES[target]:
                 depth, dirs = PATCH_INFO.get(patch, (1, ['.']))
                 dir = os.path.join(src_dir, *dirs)
@@ -397,7 +401,7 @@ WEBRTC_BUILD_TARGETS_MACOS_COMMON = [
     'api/task_queue:default_task_queue_factory',
     'sdk:native_api',
     'sdk:default_codec_factory_objc',
-    'pc:peerconnection',
+    'pc:peer_connection',
     'sdk:videocapture_objc',
 ]
 WEBRTC_BUILD_TARGETS = {
@@ -526,7 +530,7 @@ def build_webrtc_ios(
         with cd(os.path.join(webrtc_src_dir, 'tools_webrtc', 'ios')):
             ios_deployment_target = cmdcap(
                 ['python3', '-c',
-                 f'from build_ios_libs import IOS_DEPLOYMENT_TARGET; print(IOS_DEPLOYMENT_TARGET["{device}"])'])
+                 f'from build_ios_libs import IOS_MINIMUM_DEPLOYMENT_TARGET; print(IOS_MINIMUM_DEPLOYMENT_TARGET["{device}"])'])
 
         if not os.path.exists(os.path.join(work_dir, 'args.gn')) or gen or overlap_build_dir:
             gn_args = [
@@ -543,7 +547,7 @@ def build_webrtc_ios(
             ]
             gn_gen(webrtc_src_dir, work_dir, gn_args, extra_gn_args)
         if not nobuild:
-            cmd(['ninja', '-C', work_dir, *get_build_targets('ios')])
+            cmd(['autoninja', '-C', work_dir, *get_build_targets('ios')])
             ar = '/usr/bin/ar'
             archive_objects(ar, os.path.join(work_dir, 'obj'), os.path.join(work_dir, 'libwebrtc.a'))
         if test:
@@ -627,7 +631,7 @@ def build_webrtc_android(
             ]
             gn_gen(webrtc_src_dir, work_dir, gn_args, extra_gn_args)
         if not nobuild:
-            cmd(['ninja', '-C', work_dir, *get_build_targets('android')])
+            cmd(['autoninja', '-C', work_dir, *get_build_targets('android')])
             ar = os.path.join(webrtc_src_dir, 'third_party/llvm-build/Release+Asserts/bin/llvm-ar')
             archive_objects(ar, os.path.join(work_dir, 'obj'), os.path.join(work_dir, 'libwebrtc.a'))
         if test:
@@ -719,7 +723,7 @@ def build_webrtc(
     if nobuild:
         return
 
-    cmd(['ninja', '-C', webrtc_build_dir, *get_build_targets(target)])
+    cmd(['autoninja', '-C', webrtc_build_dir, *get_build_targets(target)])
 
     if test:
         cmd(['autoninja', '-C', webrtc_build_dir, 'rtc_unittests'])
@@ -940,6 +944,8 @@ TARGETS = [
     'android',
     'android_prefixed',
     'ios',
+    'apple',
+    'apple_prefixed'
 ]
 
 
@@ -951,7 +957,7 @@ def check_target(target):
         return target in ['windows_x86_64', 'windows_arm64']
     elif platform.system() == 'Darwin':
         logging.info(f'OS: {platform.system()}')
-        return target in ('macos_x86_64', 'macos_arm64', 'ios')
+        return target in ('macos_x86_64', 'macos_arm64', 'ios', 'apple', 'apple_prefixed')
     elif platform.system() == 'Linux':
         release = read_version_file('/etc/os-release')
         os = release['NAME']
@@ -1161,6 +1167,8 @@ def main():
                                  overlap_build_dir=args.webrtc_overlap_ios_build_dir)
             elif args.target in ['android', 'android_prefixed']:
                 build_webrtc_android(**build_webrtc_args, nobuild_aar=args.webrtc_nobuild_android_aar)
+            elif args.target in ['apple', 'apple_prefixed']:
+                pass
             else:
                 build_webrtc(**build_webrtc_args, target=args.target)
 

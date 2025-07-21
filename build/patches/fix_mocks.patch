@@ -1,25 +1,26 @@
 diff --git a/modules/audio_device/include/mock_audio_device.h b/modules/audio_device/include/mock_audio_device.h
-index 8483aa3da8..f66cdca0ba 100644
+index 191caf604f..f16b4d9c79 100644
 --- a/modules/audio_device/include/mock_audio_device.h
 +++ b/modules/audio_device/include/mock_audio_device.h
-@@ -149,6 +149,7 @@ class MockAudioDeviceModule : public AudioDeviceModule {
-               (AudioParameters * params),
-               (const, override));
- #endif  // WEBRTC_IOS
+@@ -138,6 +138,8 @@ class MockAudioDeviceModule : public AudioDeviceModule {
+   MOCK_METHOD(int32_t, EnableBuiltInAGC, (bool enable), (override));
+   MOCK_METHOD(int32_t, EnableBuiltInNS, (bool enable), (override));
+   MOCK_METHOD(int32_t, GetPlayoutUnderrunCount, (), (const, override));
++  MOCK_METHOD(std::optional<Stats>, GetStats, (), (const, override));
 +  MOCK_METHOD(int32_t, SetAudioDeviceSink, (AudioDeviceSink* sink), (const, override));
- };
- }  // namespace test
- }  // namespace webrtc
+ #if defined(WEBRTC_IOS)
+   MOCK_METHOD(int,
+               GetPlayoutAudioParameters,
 diff --git a/pc/test/fake_audio_capture_module.h b/pc/test/fake_audio_capture_module.h
-index c04373cdfd..ab6ff3492a 100644
+index b5b1574818..084d02caed 100644
 --- a/pc/test/fake_audio_capture_module.h
 +++ b/pc/test/fake_audio_capture_module.h
-@@ -137,6 +137,8 @@ class FakeAudioCaptureModule : public webrtc::AudioDeviceModule {
+@@ -135,6 +135,8 @@ class FakeAudioCaptureModule : public webrtc::AudioDeviceModule {
  
    int32_t GetPlayoutUnderrunCount() const override { return -1; }
  
 +  int32_t SetAudioDeviceSink(webrtc::AudioDeviceSink* sink) const override { return 0; }
 +
-   absl::optional<webrtc::AudioDeviceModule::Stats> GetStats() const override {
+   std::optional<webrtc::AudioDeviceModule::Stats> GetStats() const override {
      return webrtc::AudioDeviceModule::Stats();
    }
