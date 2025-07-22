@@ -126,7 +126,7 @@ jobs:
       # - build-windows
       - build-apple
       - build-linux
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     steps:
     - name: Create Release
       id: create_release
