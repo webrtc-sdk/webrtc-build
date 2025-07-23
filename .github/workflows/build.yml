@@ -80,7 +80,7 @@ jobs:
         path: build/_package/${{ matrix.name }}/webrtc.tar.gz
   create-release:
     name: Create Release
-    if: contains(github.ref, 'tags/m')
+    if: github.ref_type == 'tag'
     needs:
       - build-apple
       - build-linux
