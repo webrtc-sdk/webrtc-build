@@ -182,7 +182,8 @@ jobs:
     - name: Env to output
       shell: bash
       run: |
-        source create-release.env/create-release.env
+        ls -R
+        source create-release.env
         echo "upload_url=$UPLOAD_URL" >> "$GITHUB_OUTPUT"
       id: env
     - name: Upload ${{ matrix.name }} Release Asset
@@ -217,7 +218,8 @@ jobs:
     - name: Env to output
       shell: bash
       run: |
-        source create-release.env/create-release.env
+        ls -R
+        source create-release.env
         echo "upload_url=$UPLOAD_URL" >> "$GITHUB_OUTPUT"
       id: env
     - name: Upload ${{ matrix.name }} Release Asset
