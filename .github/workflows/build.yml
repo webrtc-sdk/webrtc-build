@@ -47,7 +47,7 @@ jobs:
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ steps.build.outputs.framework_name }}.xcframework
+        name: ${{ steps.build.outputs.framework_name }}.xcframework.zip
         path: build/_package/${{ matrix.name }}/${{ steps.build.outputs.framework_name }}.xcframework.zip
   build-linux:
     defaults:
