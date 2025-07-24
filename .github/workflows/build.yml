@@ -90,10 +90,13 @@ jobs:
     - uses: actions/download-artifact@v4
       with:
         path: artifacts
+        name: webrtc.android_prefixed.tar.gz
+    - uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+        name: LiveKitWebRTC.xcframework.zip
     - uses: softprops/action-gh-release@v2
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        files: |
-          artifacts/**/*.xcframework.zip
-          artifacts/**/*.tar.gz
+        files: artifacts/**
