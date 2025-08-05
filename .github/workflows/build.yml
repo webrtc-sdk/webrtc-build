@@ -7,6 +7,14 @@ on:
         description: 'webrtc-sdk commit hash'
         default: ''
         required: true
+      configuration:
+        description: 'build configuration'
+        default: 'release'
+        required: true
+        type: choice
+        options:
+          - release
+          - debug
   push:
     paths-ignore:
       - '**.md'
@@ -43,7 +51,7 @@ jobs:
         xcode-version: 16.4
     - name: Build
       id: build
-      run: ./build.${{ matrix.name }}.sh "${{ github.event.inputs.commitHash }}"
+      run: ./build.${{ matrix.name }}.sh "${{ github.event.inputs.commitHash }}" "${{ github.event.inputs.configuration || 'release' }}"
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
