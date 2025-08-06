@@ -49,6 +49,16 @@ jobs:
     - uses: maxim-lobanov/setup-xcode@v1
       with:
         xcode-version: 16.4
+    - name: Cleanup
+      run: |
+        echo "Removing all simulators"
+        xcrun simctl delete all
+        for xcode_path in /Applications/Xcode*.app; do
+          if [[ -d "$xcode_path" ]] && [[ "$xcode_path" != "/Applications/Xcode_16.4.app" ]]; then
+            echo "Removing $xcode_path"
+            rm -rf "$xcode_path"
+          fi
+        done
     - name: Build
       id: build
       run: ./build.${{ matrix.name }}.sh "${{ github.event.inputs.commitHash }}" "${{ github.event.inputs.configuration || 'release' }}"
