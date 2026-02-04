@@ -610,10 +610,11 @@ def build_webrtc_android(
     if not nobuild_aar:
         work_dir = os.path.join(webrtc_build_dir, 'aar')
         mkdir_p(work_dir)
+        aar_build_dir = os.path.join(webrtc_src_dir, 'out', 'android_aar')
         gn_args = [*gn_args_base]
         with cd(webrtc_src_dir):
             cmd(['python3', os.path.join(webrtc_src_dir, 'tools_webrtc', 'android', 'build_aar.py'),
-                '--build-dir', work_dir,
+                '--build-dir', aar_build_dir,
                  '--output', os.path.join(work_dir, 'libwebrtc.aar'),
                  '--arch', *ANDROID_ARCHS,
                  '--extra-gn-args', to_gn_args(gn_args, extra_gn_args)])
