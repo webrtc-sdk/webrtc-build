@@ -66,10 +66,10 @@ PLATFORMS=(
   "macOS-x64:target_os=\"mac\" target_cpu=\"x64\" mac_deployment_target=\"10.15\""
   "catalyst-arm64:target_os=\"ios\" target_environment=\"catalyst\" target_cpu=\"arm64\" ios_deployment_target=\"14.0\""
   "catalyst-x64:target_os=\"ios\" target_environment=\"catalyst\" target_cpu=\"x64\" ios_deployment_target=\"14.0\""
-  "tvOS-arm64-device:target_os=\"ios\" target_environment=\"appletv\" target_cpu=\"arm64\" ios_deployment_target=\"17.0\""
-  "tvOS-arm64-simulator:target_os=\"ios\" target_environment=\"appletvsimulator\" target_cpu=\"arm64\" ios_deployment_target=\"17.0\""
-  "xrOS-arm64-device:target_os=\"ios\" target_environment=\"xrdevice\" target_cpu=\"arm64\" ios_deployment_target=\"2.2.0\""
-  "xrOS-arm64-simulator:target_os=\"ios\" target_environment=\"xrsimulator\" target_cpu=\"arm64\" ios_deployment_target=\"2.2.0\""
+  "tvOS-arm64-device:target_platform=\"tvos\" target_environment=\"device\" target_cpu=\"arm64\" ios_deployment_target=\"17.0\""
+  "tvOS-arm64-simulator:target_platform=\"tvos\" target_environment=\"simulator\" target_cpu=\"arm64\" ios_deployment_target=\"17.0\""
+  "xrOS-arm64-device:target_platform=\"xros\" target_environment=\"device\" target_cpu=\"arm64\" ios_deployment_target=\"2.2.0\""
+  "xrOS-arm64-simulator:target_platform=\"xros\" target_environment=\"simulator\" target_cpu=\"arm64\" ios_deployment_target=\"2.2.0\""
 )
 
 cd "$SOURCE_DIR"

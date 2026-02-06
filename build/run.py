@@ -609,7 +609,7 @@ def build_webrtc_android(
     # aar 生成
     # build aar
     if not nobuild_aar:
-        work_dir = os.path.join(webrtc_build_dir, 'aar')
+        work_dir = os.path.join(webrtc_src_dir, 'out', 'aar')
         mkdir_p(work_dir)
         gn_args = [*gn_args_base]
         with cd(webrtc_src_dir):
@@ -620,7 +620,7 @@ def build_webrtc_android(
                  '--extra-gn-args', to_gn_args(gn_args, extra_gn_args)])
 
     for arch in ANDROID_ARCHS:
-        work_dir = os.path.join(webrtc_build_dir, arch)
+        work_dir = os.path.join(webrtc_src_dir, 'out', arch)
         if gen_force:
             rm_rf(work_dir)
         if not os.path.exists(os.path.join(work_dir, 'args.gn')) or gen:
@@ -831,6 +831,9 @@ def package_webrtc(source_dir, build_dir, package_dir, target,
 
     rm_rf(webrtc_package_dir)
     mkdir_p(webrtc_package_dir)
+
+    if target in ['android', 'android_prefixed']:
+        webrtc_build_dir = os.path.join(webrtc_src_dir, 'out')
 
     # ライセンス生成
     # License creation
@@ -1076,7 +1079,7 @@ def main():
     configuration = 'debug' if args.debug else 'release'
 
     source_dir = os.path.join(BASE_DIR, '_source', args.target)
-    build_dir = os.path.join(BASE_DIR, source_dir, 'webrtc', 'src', '_build', args.target, configuration)
+    build_dir = os.path.join(BASE_DIR, '_build', args.target, configuration)
     package_dir = os.path.join(BASE_DIR, '_package', args.target)
     patch_dir = os.path.join(BASE_DIR, 'patches')
 
