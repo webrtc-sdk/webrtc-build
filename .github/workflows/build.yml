@@ -59,6 +59,8 @@ jobs:
             rm -rf "$xcode_path"
           fi
         done
+    - name: Select Xcode 26.0
+      run: sudo xcode-select --switch /Applications/Xcode_26.0.app/Contents/Developer
     - name: Build
       id: build
       run: ./build.${{ matrix.name }}.sh "${{ github.event.inputs.commitHash }}" "${{ github.event.inputs.configuration || 'release' }}"
