@@ -608,7 +608,7 @@ def build_webrtc_android(
     # aar 生成
     # build aar
     if not nobuild_aar:
-        work_dir = os.path.join(webrtc_source_dir, 'out')
+        work_dir = os.path.join(webrtc_src_dir, 'out')
         mkdir_p(work_dir)
         gn_args = [*gn_args_base]
         with cd(webrtc_src_dir):
