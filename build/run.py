@@ -609,7 +609,7 @@ def build_webrtc_android(
     # aar 生成
     # build aar
     if not nobuild_aar:
-        work_dir = os.path.join(webrtc_src_dir, 'out')
+        work_dir = os.path.join(webrtc_build_dir, 'aar')
         mkdir_p(work_dir)
         gn_args = [*gn_args_base]
         with cd(webrtc_src_dir):
@@ -1076,7 +1076,7 @@ def main():
     configuration = 'debug' if args.debug else 'release'
 
     source_dir = os.path.join(BASE_DIR, '_source', args.target)
-    build_dir = os.path.join(BASE_DIR, '_build', args.target, configuration)
+    build_dir = os.path.join(BASE_DIR, source_dir, 'webrtc', 'src', '_build', args.target, configuration)
     package_dir = os.path.join(BASE_DIR, '_package', args.target)
     patch_dir = os.path.join(BASE_DIR, 'patches')
 
