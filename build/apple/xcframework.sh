@@ -59,17 +59,17 @@ COMMON_ARGS="
       use_rtti = true"
 
 PLATFORMS=(
-  "iOS-arm64-device:target_platform=\"ios\" target_environment=\"device\" target_cpu=\"arm64\" ios_deployment_target=\"13.0\""
-  "iOS-arm64-simulator:target_platform=\"ios\" target_environment=\"simulator\" target_cpu=\"arm64\" ios_deployment_target=\"13.0\""
-  "iOS-x64-simulator:target_platform=\"ios\" target_environment=\"simulator\" target_cpu=\"x64\" ios_deployment_target=\"13.0\""
-  "macOS-arm64:target_platform=\"mac\" target_environment=\"device\" target_cpu=\"arm64\" mac_deployment_target=\"10.15\""
-  "macOS-x64:target_platform=\"mac\" target_environment=\"device\" target_cpu=\"x64\" mac_deployment_target=\"10.15\""
-  "catalyst-arm64:target_platform=\"ios\" target_environment=\"catalyst\" target_cpu=\"arm64\" ios_deployment_target=\"14.0\""
-  "catalyst-x64:target_platform=\"ios\" target_environment=\"catalyst\" target_cpu=\"x64\" ios_deployment_target=\"14.0\""
-  "tvOS-arm64-device:target_platform=\"tvos\" target_environment=\"device\" target_cpu=\"arm64\" ios_deployment_target=\"17.0\""
-  "tvOS-arm64-simulator:target_platform=\"tvos\" target_environment=\"simulator\" target_cpu=\"arm64\" ios_deployment_target=\"17.0\""
-  "xrOS-arm64-device:target_platform=\"xros\" target_environment=\"device\" target_cpu=\"arm64\" ios_deployment_target=\"2.2.0\""
-  "xrOS-arm64-simulator:target_platform=\"xros\" target_environment=\"simulator\" target_cpu=\"arm64\" ios_deployment_target=\"2.2.0\""
+  "iOS-arm64-device:target_os=\"ios\" target_environment=\"device\" target_cpu=\"arm64\" ios_deployment_target=\"13.0\""
+  "iOS-arm64-simulator:target_os=\"ios\" target_environment=\"simulator\" target_cpu=\"arm64\" ios_deployment_target=\"13.0\""
+  "iOS-x64-simulator:target_os=\"ios\" target_environment=\"simulator\" target_cpu=\"x64\" ios_deployment_target=\"13.0\""
+  "macOS-arm64:target_os=\"mac\" target_environment=\"device\" target_cpu=\"arm64\" mac_deployment_target=\"10.15\""
+  "macOS-x64:target_os=\"mac\" target_environment=\"device\" target_cpu=\"x64\" mac_deployment_target=\"10.15\""
+  "catalyst-arm64:target_os=\"ios\" target_environment=\"catalyst\" target_cpu=\"arm64\" ios_deployment_target=\"14.0\""
+  "catalyst-x64:target_os=\"ios\" target_environment=\"catalyst\" target_cpu=\"x64\" ios_deployment_target=\"14.0\""
+  "tvOS-arm64-device:target_os=\"ios\" target_environment=\"appletv\" target_cpu=\"arm64\" ios_deployment_target=\"17.0\""
+  "tvOS-arm64-simulator:target_os=\"ios\" target_environment=\"appletvsimulator\" target_cpu=\"arm64\" ios_deployment_target=\"17.0\""
+  "xrOS-arm64-device:target_os=\"ios\" target_environment=\"xrdevice\" target_cpu=\"arm64\" ios_deployment_target=\"26.0\""
+  "xrOS-arm64-simulator:target_os=\"ios\" target_environment=\"xrsimulator\" target_cpu=\"arm64\" ios_deployment_target=\"26.0\""
 )
 
 cd "$SOURCE_DIR"
@@ -84,7 +84,11 @@ for platform_config in "${PLATFORMS[@]}"; do
   
   gn gen "$OUT_DIR/$platform" --args="$COMMON_ARGS $config" --ide=xcode
   
-  build_target="mac_framework_bundle"
+  if [[ $platform == *"macOS"* ]]; then
+    build_target="mac_framework_bundle"
+  else
+    build_target="ios_framework_bundle"
+  fi
   
   ninja -C "$OUT_DIR/$platform" "$build_target" -j $PARALLEL_BUILDS --quiet || exit 1
   end_group
