@@ -174,12 +174,16 @@ PATCH_INFO = {
     'macos_h264_encoder.patch': (2, []),
     'macos_screen_capture.patch': (2, []),
     'macos_use_xcode_clang.patch': (1, ['build']),
+    'pin_clang21.patch': (1, ['build']),
 }
 
 PATCHES = {
-    'apple': [],
+    'apple': [
+        'pin_clang21.patch',
+    ],
     'apple_prefixed': [
         'apple_prefix.patch',
+        'pin_clang21.patch',
     ],
     'windows_x86_64': [
         'add_license_dav1d.patch',
