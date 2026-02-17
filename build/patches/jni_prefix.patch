@@ -315,33 +315,3 @@ index 71826b906d10..22d8eaf6e232 100644
        foreach(_name, _input_names) {
          _name =
              string_replace(get_path_info(_name, "name"), "\$", "__") + "_jni.h"
-diff --git a/third_party/jni_zero/parse.py b/third_party/jni_zero/parse.py
-index 96e82c855699..629655e8aeb0 100644
---- a/third_party/jni_zero/parse.py
-+++ b/third_party/jni_zero/parse.py
-@@ -389,13 +389,15 @@ _IMPORT_REGEX = re.compile(r'^import\s+([^\s*]+);', flags=re.MULTILINE)
- _IMPORT_CLASS_NAME_REGEX = re.compile(r'^(.*?)\.([A-Z].*)')
- 
- 
--def _parse_imports(contents):
-+def _parse_imports(contents, package_prefix):
-   # Regex skips static imports as well as wildcard imports.
-   names = _IMPORT_REGEX.findall(contents)
-   for name in names:
-     m = _IMPORT_CLASS_NAME_REGEX.match(name)
-     if m:
-       package, class_name = m.groups()
-+      if package.startswith('org.webrtc'):
-+        package = package_prefix + '.org.webrtc'
-       yield java_types.JavaClass(
-           package.replace('.', '/') + '/' + class_name.replace('.', '$'))
- 
-@@ -434,7 +436,7 @@ def _do_parse(filename, *, package_prefix, package_prefix_filter,
-       null_marked=null_marked,
-       package_prefix=package_prefix,
-       package_prefix_filter=package_prefix_filter)
--  for java_class in _parse_imports(contents):
-+  for java_class in _parse_imports(contents, package_prefix):
-     type_resolver.add_import(java_class)
-   for java_class in nested_classes:
-     type_resolver.add_nested_class(java_class)
