@@ -66,6 +66,7 @@ jobs:
         name:
           - android
           - android_prefixed
+          - android_prefixed_stripped
     runs-on: buildjet-4vcpu-ubuntu-2204
     steps:
     - uses: actions/checkout@v4
@@ -98,6 +99,10 @@ jobs:
       with:
         path: artifacts
         name: webrtc.android_prefixed.tar.gz
+    - uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+        name: webrtc.android_prefixed_stripped.tar.gz
     - uses: actions/download-artifact@v4
       with:
         path: artifacts
