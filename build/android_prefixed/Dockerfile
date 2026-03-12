@@ -1,5 +1,5 @@
 # syntax = docker/dockerfile:experimental
-FROM ubuntu:20.04 AS builder
+FROM ubuntu:24.04 AS builder
 
 ARG PACKAGE_NAME=android_prefixed
 ARG COMMIT_HASH=""
@@ -21,6 +21,6 @@ ENV PATH="${PATH}:/root/_source/${PACKAGE_NAME}/depot_tools"
 RUN cd /root && python3 run.py package $PACKAGE_NAME
 RUN mv $PACKAGE_DIR/webrtc.tar.gz /
 
-FROM ubuntu:20.04
+FROM ubuntu:24.04
 
 COPY --from=builder /webrtc.tar.gz /
