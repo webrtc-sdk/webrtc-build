@@ -216,6 +216,12 @@ PATCHES = {
         'fix_mocks.patch',
         'jni_prefix.patch'
     ],
+    'android_prefixed_stripped': [
+        'add_license_dav1d.patch',
+        'android_webrtc_version.patch',
+        'fix_mocks.patch',
+        'jni_prefix.patch'
+    ],
     'raspberry-pi-os_armv6': [
         'add_license_dav1d.patch',
         'fix_mocks.patch',
@@ -277,7 +283,7 @@ def get_webrtc(source_dir, patch_dir, version, target,
             cmd(['gclient'])
             shutil.copyfile(os.path.join(BASE_DIR, '.gclient'), '.gclient')
             cmd(['git', 'clone', 'https://github.com/webrtc-sdk/webrtc.git', 'src'])
-            if target in ['android', 'android_prefixed']:
+            if target in ['android', 'android_prefixed', 'android_prefixed_stripped']:
                 with open('.gclient', 'a') as f:
                     f.write("target_os = [ 'android' ]\n")
             if target == 'ios':
@@ -410,6 +416,18 @@ WEBRTC_BUILD_TARGETS = {
     'ios': [*WEBRTC_BUILD_TARGETS_MACOS_COMMON, 'sdk:framework_objc'],
     'android': ['sdk/android:libwebrtc', 'sdk/android:libjingle_peerconnection_so', 'sdk/android:native_api'],
     'android_prefixed': ['sdk/android:libwebrtc', 'sdk/android:libjingle_peerconnection_so', 'sdk/android:native_api'],
+    'android_prefixed_stripped': ['sdk/android:libwebrtc', 'sdk/android:libjingle_peerconnection_so', 'sdk/android:native_api'],
+}
+
+# Target-specific extra GN args (applied in addition to --webrtc-extra-gn-args).
+TARGET_EXTRA_GN_ARGS = {
+    'android_prefixed_stripped': (
+        'enable_libaom=false '
+        'rtc_include_dav1d_in_internal_decoder_factory=false '
+        'rtc_use_h265=false '
+        'rtc_libvpx_build_vp9=false '
+        'optimize_for_size=true'
+    ),
 }
 
 
@@ -832,12 +850,12 @@ def package_webrtc(source_dir, build_dir, package_dir, target,
     rm_rf(webrtc_package_dir)
     mkdir_p(webrtc_package_dir)
 
-    if target in ['android', 'android_prefixed']:
+    if target in ['android', 'android_prefixed', 'android_prefixed_stripped']:
         webrtc_build_dir = os.path.join(webrtc_src_dir, 'out')
 
     # ライセンス生成
     # License creation
-    if target in ['android', 'android_prefixed']:
+    if target in ['android', 'android_prefixed', 'android_prefixed_stripped']:
         dirs = []
         for arch in ANDROID_ARCHS:
             dirs += [
@@ -887,7 +905,7 @@ def package_webrtc(source_dir, build_dir, package_dir, target,
             (['libwebrtc.a'], ['lib', 'libwebrtc.a']),
             (['framework', 'WebRTC.xcframework'], ['Frameworks', 'WebRTC.xcframework']),
         ]
-    elif target in ['android', 'android_prefixed']:
+    elif target in ['android', 'android_prefixed', 'android_prefixed_stripped']:
         # aar を展開して classes.jar を取り出す
         # Extract aar and grab classes.jar
         tmp = os.path.join(webrtc_build_dir, 'tmp')
@@ -947,6 +965,7 @@ TARGETS = [
     'raspberry-pi-os_armv8',
     'android',
     'android_prefixed',
+    'android_prefixed_stripped',
     'ios',
     'apple',
     'apple_prefixed'
@@ -984,7 +1003,8 @@ def check_target(target):
                       'raspberry-pi-os_armv7',
                       'raspberry-pi-os_armv8',
                       'android',
-                      'android_prefixed'):
+                      'android_prefixed',
+                      'android_prefixed_stripped'):
             return True
 
         # x86_64 用ビルドはバージョンが合っている必要がある
@@ -1169,7 +1189,12 @@ def main():
                 build_webrtc_ios(**build_webrtc_args,
                                  nobuild_framework=args.webrtc_nobuild_ios_framework,
                                  overlap_build_dir=args.webrtc_overlap_ios_build_dir)
-            elif args.target in ['android', 'android_prefixed']:
+            elif args.target in ['android', 'android_prefixed', 'android_prefixed_stripped']:
+                extra_gn_args = args.webrtc_extra_gn_args
+                target_gn_args = TARGET_EXTRA_GN_ARGS.get(args.target, '')
+                if target_gn_args:
+                    extra_gn_args = (target_gn_args + ' ' + extra_gn_args).strip() if extra_gn_args else target_gn_args
+                build_webrtc_args['extra_gn_args'] = extra_gn_args
                 build_webrtc_android(**build_webrtc_args, nobuild_aar=args.webrtc_nobuild_android_aar)
             elif args.target in ['apple', 'apple_prefixed']:
                 pass
