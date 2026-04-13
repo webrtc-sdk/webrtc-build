@@ -70,16 +70,16 @@ jobs:
     runs-on: nscloud-ubuntu-22.04-amd64-8x16
     steps:
     - uses: actions/checkout@v4
-    - name: Disk Cleanup
-      run: |
-        df -h
-        docker container prune -f
-        docker image prune -a -f
-        # 3.9GB
-        sudo rm -rf /usr/local/share/boost
-        # 17GB
-        sudo rm -rf /usr/share/dotnet
-        df -h
+    - name: Free Disk Space (Ubuntu)
+      uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+      with:
+        android: false
+        tool-cache: true
+        dotnet: true
+        haskell: true
+        large-packages: true
+        docker-images: true
+        swap-storage: true
     - run: ./build.${{ matrix.name }}.sh "${{ github.event.inputs.commitHash }}"
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
