@@ -67,19 +67,9 @@ jobs:
           - android
           - android_prefixed
           - android_prefixed_stripped
-    runs-on: buildjet-4vcpu-ubuntu-2204
+    runs-on: namespace-profile-webrtc-android
     steps:
     - uses: actions/checkout@v4
-    - name: Disk Cleanup
-      run: |
-        df -h
-        docker container prune -f
-        docker image prune -a -f
-        # 3.9GB
-        sudo rm -rf /usr/local/share/boost
-        # 17GB
-        sudo rm -rf /usr/share/dotnet
-        df -h
     - run: ./build.${{ matrix.name }}.sh "${{ github.event.inputs.commitHash }}"
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
