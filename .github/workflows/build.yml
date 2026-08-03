@@ -43,6 +43,7 @@ jobs:
         name:
           - apple
           - apple_prefixed
+          - apple_prefixed_stripped
     runs-on: macos-26
     steps:
     - uses: actions/checkout@v5
@@ -97,6 +98,10 @@ jobs:
       with:
         path: artifacts
         name: LiveKitWebRTC.xcframework.zip
+    - uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+        name: LiveKitWebRTC-stripped.xcframework.zip
     - uses: softprops/action-gh-release@v2
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -3,7 +3,7 @@
 set -e
 
 if [[ -z "$1" ]]; then
-  echo "Usage: $0 'debug' | 'release' 'source_dir' 'out_dir' ['prefix']"
+  echo "Usage: $0 'debug' | 'release' 'source_dir' 'out_dir' ['prefix'] ['extra_gn_args']"
   exit 0
 fi
 
@@ -11,6 +11,9 @@ MODE="$1"
 SOURCE_DIR="$(realpath "$2")"
 OUT_DIR="$(realpath "$3")"
 PREFIX="${4:-""}"
+# Appended after COMMON_ARGS; GN uses the last assignment, so these can
+# override the defaults above (e.g. enable_libaom = false).
+EXTRA_GN_ARGS="${5:-""}"
 
 if [ -z "$PREFIX" ]; then
   FRAMEWORK_NAME="WebRTC"
@@ -25,7 +28,7 @@ fi
 
 PARALLEL_BUILDS=6
 
-echo "xcframework.sh: MODE=$MODE, DEBUG=$DEBUG, SOURCE_DIR=$SOURCE_DIR, OUT_DIR=$OUT_DIR, PREFIX=$PREFIX, FRAMEWORK_NAME=$FRAMEWORK_NAME"
+echo "xcframework.sh: MODE=$MODE, DEBUG=$DEBUG, SOURCE_DIR=$SOURCE_DIR, OUT_DIR=$OUT_DIR, PREFIX=$PREFIX, FRAMEWORK_NAME=$FRAMEWORK_NAME, EXTRA_GN_ARGS=$EXTRA_GN_ARGS"
 
 start_group() {
   if [[ "$CI" == "true" ]]; then
@@ -82,7 +85,7 @@ for platform_config in "${PLATFORMS[@]}"; do
   
   start_group "Building $platform"
   
-  gn gen "$OUT_DIR/$platform" --args="$COMMON_ARGS $config" --ide=xcode
+  gn gen "$OUT_DIR/$platform" --args="$COMMON_ARGS $config $EXTRA_GN_ARGS" --ide=xcode
   
   if [[ $platform == *"macOS"* ]]; then
     build_target="mac_framework_bundle"
