@@ -83,6 +83,47 @@ def mkdir_p(path: str):
     logging.debug(f'mkdir -p {path} => directory created')
 
 
+def ensure_test_resources(webrtc_src_dir: str, unittest_dir: str):
+    """Make WebRTC test resources discoverable next to an out-of-tree build.
+
+    tests currently assumes that the project root is two directories above 
+    the directory containing the test binary (see test/testsupport/file_utils_override.cc).
+
+    Our layout is _build/<target>/<config>/webrtc/, so project_root becomes
+    _build/<target>/ — not webrtc/src/. Symlink src/resources to resources there.
+    """
+    resources_src = os.path.join(webrtc_src_dir, 'resources')
+    if not os.path.isdir(resources_src):
+        raise Exception(
+            f'Test resources not found at {resources_src}. '
+            'Ensure gclient sync downloaded chromium-webrtc-resources.')
+
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(unittest_dir)))
+    resources_dst = os.path.join(project_root, 'resources')
+
+    if os.path.lexists(resources_dst):
+        if os.path.islink(resources_dst) and (
+                os.path.realpath(resources_dst) == os.path.realpath(resources_src)):
+            logging.debug(f'test resources already linked: {resources_dst}')
+            return
+        if os.path.isdir(resources_dst) and not os.path.islink(resources_dst):
+            logging.debug(f'test resources directory already present: {resources_dst}')
+            return
+        if os.path.islink(resources_dst) or os.path.isfile(resources_dst):
+            os.unlink(resources_dst)
+        else:
+            shutil.rmtree(resources_dst)
+
+    logging.info(f'Linking test resources {resources_src} -> {resources_dst}')
+    os.symlink(resources_src, resources_dst, target_is_directory=True)
+
+
+def run_rtc_unittests(webrtc_src_dir: str, unittest_dir: str, filename: str = 'rtc_unittests'):
+    ensure_test_resources(webrtc_src_dir, unittest_dir)
+    run_unittests = os.path.join(unittest_dir, filename)
+    cmd([run_unittests])
+
+
 if platform.system() == 'Windows':
     PATH_SEPARATOR = ';'
 else:
@@ -574,8 +615,7 @@ def build_webrtc_ios(
             archive_objects(ar, os.path.join(work_dir, 'obj'), os.path.join(work_dir, 'libwebrtc.a'))
         if test:
             cmd(['autoninja', '-C', work_dir, 'rtc_unittests'])
-            run_unittests = os.path.join(work_dir, 'rtc_unittests')
-            cmd([run_unittests])
+            run_rtc_unittests(webrtc_src_dir, work_dir)
         libs.append(os.path.join(work_dir, 'libwebrtc.a'))
 
     cmd(['lipo', *libs, '-create', '-output', os.path.join(webrtc_build_dir, 'libwebrtc.a')])
@@ -659,8 +699,7 @@ def build_webrtc_android(
             archive_objects(ar, os.path.join(work_dir, 'obj'), os.path.join(work_dir, 'libwebrtc.a'))
         if test:
             cmd(['autoninja', '-C', work_dir, 'rtc_unittests'])
-            run_unittests = os.path.join(work_dir, 'rtc_unittests')
-            cmd([run_unittests])
+            run_rtc_unittests(webrtc_src_dir, work_dir)
 
 
 def build_webrtc(
@@ -754,9 +793,7 @@ def build_webrtc(
             run_unittests_filename = 'rtc_unittests.exe'
         else:
             run_unittests_filename = 'rtc_unittests'
-
-        run_unittests = os.path.join(webrtc_build_dir, run_unittests_filename)
-        cmd([run_unittests])
+        run_rtc_unittests(webrtc_src_dir, webrtc_build_dir, run_unittests_filename)
 
     if target in ['windows_x86_64', 'windows_arm64']:
         pass
