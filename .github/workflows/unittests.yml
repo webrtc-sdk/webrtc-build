@@ -51,7 +51,7 @@ jobs:
           COMMIT_HASH: ${{ github.event.inputs.commitHash }}
         run: |
           if [ -n "$COMMIT_HASH" ]; then
-            python3 run.py build ubuntu-24.04_x86_64 --test --commit "$COMMIT_HASH"
+            python3 run.py build ubuntu-24.04_x86_64 --debug --test --commit "$COMMIT_HASH"
           else
-            python3 run.py build ubuntu-24.04_x86_64 --test
+            python3 run.py build ubuntu-24.04_x86_64 --debug --test
           fi

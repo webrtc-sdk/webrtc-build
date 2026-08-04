@@ -447,6 +447,15 @@ COMMON_GN_ARGS = [
     "rtc_enable_protobuf=false",
 ]
 
+
+def common_gn_args(test=False):
+    """COMMON_GN_ARGS, with protobuf enabled when building/running tests."""
+    args = list(COMMON_GN_ARGS)
+    if test:
+        args.append('rtc_enable_protobuf=true')
+    return args
+
+
 WEBRTC_BUILD_TARGETS_MACOS_COMMON = [
     'api/audio_codecs:builtin_audio_decoder_factory',
     'api/task_queue:default_task_queue_factory',
@@ -555,7 +564,7 @@ def build_webrtc_ios(
         'enable_dsyms=false',
         'use_custom_libcxx=false',
         'treat_warnings_as_errors=false',
-        *COMMON_GN_ARGS,
+        *common_gn_args(test=test),
     ]
 
     # WebRTC.xcframework のビルド
@@ -665,7 +674,7 @@ def build_webrtc_android(
         f"is_debug={'true' if debug else 'false'}",
         f"is_java_debug={'true' if debug else 'false'}",
         'treat_warnings_as_errors=false',
-        *COMMON_GN_ARGS
+        *common_gn_args(test=test),
     ]
 
     # aar 生成
@@ -726,7 +735,7 @@ def build_webrtc(
         gn_args = [
             f"is_debug={'true' if debug else 'false'}",
             f'rtc_include_tests={"true" if test else "false"}',
-            *COMMON_GN_ARGS,
+            *common_gn_args(test=test),
         ]
         if target in ['windows_x86_64', 'windows_arm64']:
             gn_args += [
