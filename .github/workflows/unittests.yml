@@ -1,0 +1,57 @@
+name: WebRTC Unit Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      commitHash:
+        description: 'webrtc-sdk commit hash'
+        default: ''
+        required: true
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - 'NOTICE'
+      - '.gitignore'
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - 'NOTICE'
+      - '.gitignore'
+
+permissions:
+  contents: read
+
+jobs:
+  unittests:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ./build
+    steps:
+      - uses: actions/checkout@v4
+      - name: Disk Cleanup
+        working-directory: ${{ github.workspace }}
+        run: |
+          df -h
+          docker container prune -f
+          docker image prune -a -f
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /usr/share/dotnet
+          df -h
+      - name: Install dependencies
+        run: sudo ./scripts/apt_install_x86_64.sh
+      - name: Install test dependencies
+        run: sudo ./scripts/apt_install_test_deps.sh
+      - name: Build and run unittests
+        env:
+          COMMIT_HASH: ${{ github.event.inputs.commitHash }}
+        run: |
+          if [ -n "$COMMIT_HASH" ]; then
+            python3 run.py build ubuntu-24.04_x86_64 --debug --test --commit "$COMMIT_HASH"
+          else
+            python3 run.py build ubuntu-24.04_x86_64 --debug --test
+          fi
