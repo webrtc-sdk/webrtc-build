@@ -747,7 +747,10 @@ def build_webrtc(
             gn_args += [
                 'target_os="mac"',
                 f'target_cpu="{"x64" if target == "macos_x86_64" else "arm64"}"',
-                'mac_deployment_target="10.11"',
+                # 10.11 no longer compiles: abseil uses aligned operator new,
+                # which clang only allows from 10.13. Match the deployment
+                # target apple/xcframework.sh ships the macOS slices with.
+                'mac_deployment_target="10.15"',
                 'enable_stripping=true',
                 'enable_dsyms=true',
                 'rtc_libvpx_build_vp9=true',
