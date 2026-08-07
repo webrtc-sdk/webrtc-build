@@ -747,13 +747,21 @@ def build_webrtc(
             gn_args += [
                 'target_os="mac"',
                 f'target_cpu="{"x64" if target == "macos_x86_64" else "arm64"}"',
-                'mac_deployment_target="10.11"',
+                # No mac_deployment_target: inherit build/'s own default (12.0),
+                # which is the oldest macOS the toolchain still tests. The old
+                # 10.11 pin stopped compiling (abseil needs aligned operator
+                # new, 10.13+).
                 'enable_stripping=true',
                 'enable_dsyms=true',
                 'rtc_libvpx_build_vp9=true',
                 'rtc_enable_symbol_export=true',
                 'rtc_enable_objc_symbol_export=false',
-                'use_custom_libcxx=false',
+                # The clang module build of libc++ needs the include config that
+                # use_custom_libcxx=false removes, and fails with "unknown type
+                # name 'size_t'". apple/xcframework.sh builds the shipped macOS
+                # slices with the default (custom) libc++, so do the same here
+                # when building tests; packaged libs keep the system libc++.
+                f'use_custom_libcxx={"true" if test else "false"}',
                 'treat_warnings_as_errors=false',
                 'clang_use_chrome_plugins=false',
                 'use_lld=false',
