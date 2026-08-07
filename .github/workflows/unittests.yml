@@ -1,0 +1,72 @@
+name: WebRTC Unit Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      commitHash:
+        description: 'webrtc-sdk commit hash'
+        default: ''
+        required: true
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - 'NOTICE'
+      - '.gitignore'
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - 'NOTICE'
+      - '.gitignore'
+
+permissions:
+  contents: read
+
+jobs:
+  unittests:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: ubuntu-24.04_x86_64
+            os: ubuntu-24.04
+          - target: macos_arm64
+            os: macos-26
+    defaults:
+      run:
+        working-directory: ./build
+    steps:
+      - uses: actions/checkout@v4
+      - name: Disk Cleanup
+        if: runner.os == 'Linux'
+        working-directory: ${{ github.workspace }}
+        run: |
+          df -h
+          docker container prune -f
+          docker image prune -a -f
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /usr/share/dotnet
+          df -h
+      - name: Install dependencies
+        if: runner.os == 'Linux'
+        run: sudo ./scripts/apt_install_x86_64.sh
+      - name: Install test dependencies
+        if: runner.os == 'Linux'
+        run: sudo ./scripts/apt_install_test_deps.sh
+      - name: Select Xcode 26.0
+        if: runner.os == 'macOS'
+        run: sudo xcode-select --switch /Applications/Xcode_26.0.app/Contents/Developer
+      - name: Build and run unittests
+        env:
+          COMMIT_HASH: ${{ github.event.inputs.commitHash }}
+        run: |
+          if [ -n "$COMMIT_HASH" ]; then
+            python3 run.py build ${{ matrix.target }} --debug --test --commit "$COMMIT_HASH"
+          else
+            python3 run.py build ${{ matrix.target }} --debug --test
+          fi

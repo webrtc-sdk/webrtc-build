@@ -83,6 +83,47 @@ def mkdir_p(path: str):
     logging.debug(f'mkdir -p {path} => directory created')
 
 
+def ensure_test_resources(webrtc_src_dir: str, unittest_dir: str):
+    """Make WebRTC test resources discoverable next to an out-of-tree build.
+
+    tests currently assumes that the project root is two directories above 
+    the directory containing the test binary (see test/testsupport/file_utils_override.cc).
+
+    Our layout is _build/<target>/<config>/webrtc/, so project_root becomes
+    _build/<target>/ — not webrtc/src/. Symlink src/resources to resources there.
+    """
+    resources_src = os.path.join(webrtc_src_dir, 'resources')
+    if not os.path.isdir(resources_src):
+        raise Exception(
+            f'Test resources not found at {resources_src}. '
+            'Ensure gclient sync downloaded chromium-webrtc-resources.')
+
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(unittest_dir)))
+    resources_dst = os.path.join(project_root, 'resources')
+
+    if os.path.lexists(resources_dst):
+        if os.path.islink(resources_dst) and (
+                os.path.realpath(resources_dst) == os.path.realpath(resources_src)):
+            logging.debug(f'test resources already linked: {resources_dst}')
+            return
+        if os.path.isdir(resources_dst) and not os.path.islink(resources_dst):
+            logging.debug(f'test resources directory already present: {resources_dst}')
+            return
+        if os.path.islink(resources_dst) or os.path.isfile(resources_dst):
+            os.unlink(resources_dst)
+        else:
+            shutil.rmtree(resources_dst)
+
+    logging.info(f'Linking test resources {resources_src} -> {resources_dst}')
+    os.symlink(resources_src, resources_dst, target_is_directory=True)
+
+
+def run_rtc_unittests(webrtc_src_dir: str, unittest_dir: str, filename: str = 'rtc_unittests'):
+    ensure_test_resources(webrtc_src_dir, unittest_dir)
+    run_unittests = os.path.join(unittest_dir, filename)
+    cmd([run_unittests])
+
+
 if platform.system() == 'Windows':
     PATH_SEPARATOR = ';'
 else:
@@ -254,6 +295,10 @@ PATCHES = {
         'add_license_dav1d.patch',
         'fix_mocks.patch',
     ],
+    'ubuntu-24.04_x86_64': [
+        'add_license_dav1d.patch',
+        'fix_mocks.patch',
+    ],
 }
 
 
@@ -402,6 +447,15 @@ COMMON_GN_ARGS = [
     "rtc_enable_protobuf=false",
 ]
 
+
+def common_gn_args(test=False):
+    """COMMON_GN_ARGS, with protobuf enabled when building/running tests."""
+    args = list(COMMON_GN_ARGS)
+    if test:
+        args.append('rtc_enable_protobuf=true')
+    return args
+
+
 WEBRTC_BUILD_TARGETS_MACOS_COMMON = [
     'api/audio_codecs:builtin_audio_decoder_factory',
     'api/task_queue:default_task_queue_factory',
@@ -510,7 +564,7 @@ def build_webrtc_ios(
         'enable_dsyms=false',
         'use_custom_libcxx=false',
         'treat_warnings_as_errors=false',
-        *COMMON_GN_ARGS,
+        *common_gn_args(test=test),
     ]
 
     # WebRTC.xcframework のビルド
@@ -570,8 +624,7 @@ def build_webrtc_ios(
             archive_objects(ar, os.path.join(work_dir, 'obj'), os.path.join(work_dir, 'libwebrtc.a'))
         if test:
             cmd(['autoninja', '-C', work_dir, 'rtc_unittests'])
-            run_unittests = os.path.join(work_dir, 'rtc_unittests')
-            cmd([run_unittests])
+            run_rtc_unittests(webrtc_src_dir, work_dir)
         libs.append(os.path.join(work_dir, 'libwebrtc.a'))
 
     cmd(['lipo', *libs, '-create', '-output', os.path.join(webrtc_build_dir, 'libwebrtc.a')])
@@ -621,7 +674,7 @@ def build_webrtc_android(
         f"is_debug={'true' if debug else 'false'}",
         f"is_java_debug={'true' if debug else 'false'}",
         'treat_warnings_as_errors=false',
-        *COMMON_GN_ARGS
+        *common_gn_args(test=test),
     ]
 
     # aar 生成
@@ -655,8 +708,7 @@ def build_webrtc_android(
             archive_objects(ar, os.path.join(work_dir, 'obj'), os.path.join(work_dir, 'libwebrtc.a'))
         if test:
             cmd(['autoninja', '-C', work_dir, 'rtc_unittests'])
-            run_unittests = os.path.join(work_dir, 'rtc_unittests')
-            cmd([run_unittests])
+            run_rtc_unittests(webrtc_src_dir, work_dir)
 
 
 def build_webrtc(
@@ -683,7 +735,7 @@ def build_webrtc(
         gn_args = [
             f"is_debug={'true' if debug else 'false'}",
             f'rtc_include_tests={"true" if test else "false"}',
-            *COMMON_GN_ARGS,
+            *common_gn_args(test=test),
         ]
         if target in ['windows_x86_64', 'windows_arm64']:
             gn_args += [
@@ -695,13 +747,21 @@ def build_webrtc(
             gn_args += [
                 'target_os="mac"',
                 f'target_cpu="{"x64" if target == "macos_x86_64" else "arm64"}"',
-                'mac_deployment_target="10.11"',
+                # No mac_deployment_target: inherit build/'s own default (12.0),
+                # which is the oldest macOS the toolchain still tests. The old
+                # 10.11 pin stopped compiling (abseil needs aligned operator
+                # new, 10.13+).
                 'enable_stripping=true',
                 'enable_dsyms=true',
                 'rtc_libvpx_build_vp9=true',
                 'rtc_enable_symbol_export=true',
                 'rtc_enable_objc_symbol_export=false',
-                'use_custom_libcxx=false',
+                # The clang module build of libc++ needs the include config that
+                # use_custom_libcxx=false removes, and fails with "unknown type
+                # name 'size_t'". apple/xcframework.sh builds the shipped macOS
+                # slices with the default (custom) libc++, so do the same here
+                # when building tests; packaged libs keep the system libc++.
+                f'use_custom_libcxx={"true" if test else "false"}',
                 'treat_warnings_as_errors=false',
                 'clang_use_chrome_plugins=false',
                 'use_lld=false',
@@ -729,7 +789,7 @@ def build_webrtc(
                     'arm_use_neon=false',
                     'enable_libaom=false',
                 ]
-        elif target in ('ubuntu-18.04_x86_64', 'ubuntu-20.04_x86_64', 'ubuntu-22.04_x86_64'):
+        elif target in ('ubuntu-18.04_x86_64', 'ubuntu-20.04_x86_64', 'ubuntu-22.04_x86_64', 'ubuntu-24.04_x86_64'):
             gn_args += [
                 'target_os="linux"',
                 'rtc_use_pipewire=false',
@@ -750,9 +810,7 @@ def build_webrtc(
             run_unittests_filename = 'rtc_unittests.exe'
         else:
             run_unittests_filename = 'rtc_unittests'
-
-        run_unittests = os.path.join(webrtc_build_dir, run_unittests_filename)
-        cmd([run_unittests])
+        run_rtc_unittests(webrtc_src_dir, webrtc_build_dir, run_unittests_filename)
 
     if target in ['windows_x86_64', 'windows_arm64']:
         pass
@@ -958,6 +1016,7 @@ TARGETS = [
     'ubuntu-18.04_x86_64',
     'ubuntu-20.04_x86_64',
     'ubuntu-22.04_x86_64',
+    'ubuntu-24.04_x86_64',
     'ubuntu-18.04_armv8',
     'ubuntu-20.04_armv8',
     'raspberry-pi-os_armv6',
@@ -1016,6 +1075,8 @@ def check_target(target):
         if target == 'ubuntu-20.04_x86_64' and osver == '20.04':
             return True
         if target == 'ubuntu-22.04_x86_64' and osver == '22.04':
+            return True
+        if target == 'ubuntu-24.04_x86_64' and osver == '24.04':
             return True
 
         return False

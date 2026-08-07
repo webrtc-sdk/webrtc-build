@@ -5,9 +5,8 @@ index d950a49ffb..ab6bb2795e 100644
 @@ -144,6 +144,8 @@ class MockAudioDeviceModule : public AudioDeviceModule {
    MOCK_METHOD(int32_t, EnableBuiltInNS, (bool enable), (override));
    MOCK_METHOD(int32_t, GetPlayoutUnderrunCount, (), (const, override));
-   MOCK_METHOD(std::optional<Stats>, GetStats, (), (const, override));
-+  MOCK_METHOD(int32_t, SetAudioDeviceSink, (AudioDeviceSink* sink), (const, override));
 +  MOCK_METHOD(std::optional<Stats>, GetStats, (), (const, override));
++  MOCK_METHOD(int32_t, SetObserver, (AudioDeviceObserver* observer), (override));
  #if defined(WEBRTC_IOS)
    MOCK_METHOD(int,
                GetPlayoutAudioParameters,
@@ -19,7 +18,7 @@ index 0bee8f8ea3..c37ce4d213 100644
  
    int32_t GetPlayoutUnderrunCount() const override { return -1; }
  
-+  int32_t SetAudioDeviceSink(webrtc::AudioDeviceSink* sink) const override { return 0; }
++  int32_t SetObserver(webrtc::AudioDeviceObserver* observer) override { return 0; }
 +
    std::optional<webrtc::AudioDeviceModule::Stats> GetStats() const override {
      return webrtc::AudioDeviceModule::Stats();
