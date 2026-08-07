@@ -10,16 +10,3 @@ index d950a49ffb..ab6bb2795e 100644
  #if defined(WEBRTC_IOS)
    MOCK_METHOD(int,
                GetPlayoutAudioParameters,
-diff --git a/pc/test/fake_audio_capture_module.h b/pc/test/fake_audio_capture_module.h
-index 0bee8f8ea3..c37ce4d213 100644
---- a/pc/test/fake_audio_capture_module.h
-+++ b/pc/test/fake_audio_capture_module.h
-@@ -140,6 +140,8 @@ class FakeAudioCaptureModule : public webrtc::AudioDeviceModule {
- 
-   int32_t GetPlayoutUnderrunCount() const override { return -1; }
- 
-+  int32_t SetObserver(webrtc::AudioDeviceObserver* observer) override { return 0; }
-+
-   std::optional<webrtc::AudioDeviceModule::Stats> GetStats() const override {
-     return webrtc::AudioDeviceModule::Stats();
-   }
