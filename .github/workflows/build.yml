@@ -102,3 +102,37 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         files: artifacts/**
+  publish-xcframework:
+    name: Publish
+    if: github.ref_type == 'tag'
+    needs:
+      - create-release
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+        name: LiveKitWebRTC.xcframework.zip
+    - name: Render Package.swift and podspec
+      id: render
+      run: |
+        # Build tags are prefixed with m (m144.7559.13); hosting repo tags are not.
+        VERSION="${GITHUB_REF_NAME#m}"
+        CHECKSUM=$(sha256sum artifacts/LiveKitWebRTC.xcframework.zip | awk '{print $1}')
+        echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+        mkdir -p out
+        for f in Package.swift LiveKitWebRTC.podspec; do
+          sed -e "s|{{VERSION}}|${VERSION}|g" \
+              -e "s|{{CHECKSUM}}|${CHECKSUM}|g" \
+              ".github/templates/$f" > "out/$f"
+        done
+    - uses: livekit/publish-xcframework-action@3b8645334fb62b0fd1d7067067819bcd111db157 # main
+      with:
+        xcframework-zip: artifacts/LiveKitWebRTC.xcframework.zip
+        version: ${{ steps.render.outputs.version }}
+        hosting-repo: livekit/webrtc-xcframework
+        files: |
+          out/Package.swift:Package.swift
+          out/LiveKitWebRTC.podspec:LiveKitWebRTC.podspec
+        token: ${{ secrets.XCFRAMEWORK_PAT }}
