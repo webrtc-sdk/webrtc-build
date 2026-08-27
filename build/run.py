@@ -301,6 +301,11 @@ PATCHES = {
     ],
 }
 
+# Patches applied only when building with --test.
+TEST_PATCHES = [
+    'fix_build_for_validate_test_registration.patch',
+]
+
 
 def apply_patch(patch, dir, depth):
     with cd(dir):
@@ -315,7 +320,7 @@ def apply_patch(patch, dir, depth):
 
 
 def get_webrtc(source_dir, patch_dir, version, target,
-               webrtc_source_dir=None, force=False, fetch=False):
+               webrtc_source_dir=None, force=False, fetch=False, test=False):
     if webrtc_source_dir is None:
         webrtc_source_dir = os.path.join(source_dir, 'webrtc')
     if force:
@@ -348,7 +353,8 @@ def get_webrtc(source_dir, patch_dir, version, target,
                 cmd(['git', 'checkout', '-f', version])
             cmd(['git', 'clean', '-df'])
             cmd(['gclient', 'sync', '-D', '--force', '--reset', '--with_branch_heads', '--jobs=8'])
-            for patch in PATCHES[target]:
+            patches = [*PATCHES[target], *(TEST_PATCHES if test else [])]
+            for patch in patches:
                 depth, dirs = PATCH_INFO.get(patch, (1, ['.']))
                 dir = os.path.join(src_dir, *dirs)
                 apply_patch(os.path.join(patch_dir, patch), dir, depth)
@@ -1227,7 +1233,8 @@ def main():
             # Get source
             get_webrtc(source_dir, patch_dir, commit, args.target,
                        webrtc_source_dir=webrtc_source_dir,
-                       fetch=args.webrtc_fetch, force=args.webrtc_fetch_force)
+                       fetch=args.webrtc_fetch, force=args.webrtc_fetch_force,
+                       test=args.test)
 
             # ビルド
             # Build
