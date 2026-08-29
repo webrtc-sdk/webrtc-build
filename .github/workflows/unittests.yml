@@ -41,6 +41,8 @@ jobs:
             os: ubuntu-24.04
           - target: macos_arm64
             os: macos-26
+          - target: windows_x86_64
+            os: windows-2025
     defaults:
       run:
         working-directory: ./build
@@ -56,6 +58,18 @@ jobs:
           sudo rm -rf /usr/local/share/boost
           sudo rm -rf /usr/share/dotnet
           df -h
+      - name: Disk Cleanup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: ${{ github.workspace }}
+        run: |
+          Get-PSDrive -PSProvider FileSystem | Select-Object Name, Used, Free
+          foreach ($dir in @('C:\Android', 'C:\Program Files (x86)\Android', 'C:\Program Files\Google\Chrome', "$env:AGENT_TOOLSDIRECTORY\Ruby", "$env:AGENT_TOOLSDIRECTORY\go", "$env:AGENT_TOOLSDIRECTORY\node")) {
+            if (Test-Path $dir) {
+              Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
+            }
+          }
+          Get-PSDrive -PSProvider FileSystem | Select-Object Name, Used, Free
       - name: Install dependencies
         if: runner.os == 'Linux'
         run: sudo ./scripts/apt_install_x86_64.sh
@@ -66,6 +80,7 @@ jobs:
         if: runner.os == 'macOS'
         run: sudo xcode-select --switch /Applications/Xcode_26.0.app/Contents/Developer
       - name: Build and run unittests
+        if: runner.os != 'Windows'
         env:
           COMMIT_HASH: ${{ github.event.inputs.commitHash }}
         run: |
@@ -74,3 +89,21 @@ jobs:
           else
             python3 run.py build ${{ matrix.target }} --debug --test
           fi
+      - name: Build and run unittests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          COMMIT_HASH: ${{ github.event.inputs.commitHash }}
+        run: |
+          # GitHub Actions の作業ドライブ (D:) は容量が少ないので、
+          # ソースとビルド成果物は C:\ に置く (build.windows_x86_64.ps1 と同じ)。
+          # Put the source and build output on C:\ because the D:\ work drive
+          # is too small (same as build.windows_x86_64.ps1).
+          $extra = @()
+          if ($env:COMMIT_HASH) {
+            $extra = @('--commit', $env:COMMIT_HASH)
+          }
+          python3 run.py build ${{ matrix.target }} `
+            --source-dir 'C:\webrtc' --build-dir 'C:\webrtc-build' `
+            --debug --test `
+            --webrtc-extra-gn-args 'symbol_level=1' @extra
