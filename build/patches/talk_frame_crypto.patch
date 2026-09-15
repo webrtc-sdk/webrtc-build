@@ -1,0 +1,165 @@
+diff --git a/api/crypto/frame_crypto_transformer.cc b/api/crypto/frame_crypto_transformer.cc
+index 1b4b4de..22ce87b 100644
+--- a/api/crypto/frame_crypto_transformer.cc
++++ b/api/crypto/frame_crypto_transformer.cc
+@@ -249,10 +249,12 @@ uint8_t get_unencrypted_bytes(webrtc::TransformableFrameInterface* frame,
+ int DeriveHkdfSha256FromSecret(const std::vector<uint8_t>& secret,
+                                const std::vector<uint8_t>& salt,
+                                unsigned int optional_length_bits,
+-                               std::vector<uint8_t>& derived_key) {
++                               std::vector<uint8_t>& derived_key,
++                               bool empty_info = false) {
+   size_t key_size_bytes = optional_length_bits / 8;
+-  // Use 128 bytes of zeros to padded as info.
+-  auto info = std::vector<uint8_t>(128, 0);
++  // Use 128 bytes of zeros to padded as info, unless an empty info is
++  // requested (Web Crypto compatible).
++  auto info = std::vector<uint8_t>(empty_info ? 0 : 128, 0);
+   derived_key.resize(key_size_bytes);
+   if (::HKDF((uint8_t*)derived_key.data(), key_size_bytes, EVP_sha256(),
+              secret.data(), secret.size(), salt.data(), salt.size(),
+@@ -387,6 +389,9 @@ int ParticipantKeyHandler::DoKeyDerivation(const std::vector<uint8_t>& key,
+     case KeyDerivationAlgorithm::kHKDF:
+       return DeriveHkdfSha256FromSecret(key, salt, optional_length_bits,
+                                         derived_key);
++    case KeyDerivationAlgorithm::kHKDFEmptyInfo:
++      return DeriveHkdfSha256FromSecret(key, salt, optional_length_bits,
++                                        derived_key, true);
+     default:
+       break;
+   }
+@@ -736,7 +741,7 @@ void FrameCryptorTransformer::decryptFrame(
+ 
+         auto new_material = key_handler->RatchetKeyMaterial(currentKeyMaterial);
+         ratcheted_key_set = key_handler->DeriveKeys(
+-            new_material, key_provider_->options().ratchet_salt, 128);
++            new_material, key_provider_->options().derivation_salt(), 128);
+ 
+         if (AesEncryptDecrypt(EncryptOrDecrypt::kDecrypt, algorithm_,
+                               ratcheted_key_set->encryption_key, iv,
+@@ -930,7 +935,7 @@ RTCErrorOr<std::vector<uint8_t>> DataPacketCryptor::Decrypt(
+ 
+         auto new_material = key_handler->RatchetKeyMaterial(currentKeyMaterial);
+         ratcheted_key_set = key_handler->DeriveKeys(
+-            new_material, key_provider_->options().ratchet_salt, 128);
++            new_material, key_provider_->options().derivation_salt(), 128);
+ 
+         if (AesEncryptDecrypt(EncryptOrDecrypt::kDecrypt, algorithm_,
+                               ratcheted_key_set->encryption_key, iv,
+diff --git a/api/crypto/frame_crypto_transformer.h b/api/crypto/frame_crypto_transformer.h
+index 6d01653..9e6bf7c 100644
+--- a/api/crypto/frame_crypto_transformer.h
++++ b/api/crypto/frame_crypto_transformer.h
+@@ -39,11 +39,17 @@ class ParticipantKeyHandler;
+ enum KeyDerivationAlgorithm {
+   kPBKDF2 = 0,
+   kHKDF,
++  // HKDF-SHA256 with an empty info parameter, matching Web Crypto
++  // deriveKey/deriveBits with info = new ArrayBuffer().
++  kHKDFEmptyInfo,
+ };
+ 
+ struct KeyProviderOptions {
+   bool shared_key;
+   std::vector<uint8_t> ratchet_salt;
++  // Salt used to derive the AES key from the key material. When empty,
++  // ratchet_salt is used for both derivation and ratcheting.
++  std::vector<uint8_t> key_derivation_salt;
+   std::vector<uint8_t> uncrypted_magic_bytes;
+   int ratchet_window_size;
+   int failure_tolerance;
+@@ -61,11 +67,16 @@ struct KeyProviderOptions {
+   KeyProviderOptions(KeyProviderOptions& copy)
+       : shared_key(copy.shared_key),
+         ratchet_salt(copy.ratchet_salt),
++        key_derivation_salt(copy.key_derivation_salt),
+         uncrypted_magic_bytes(copy.uncrypted_magic_bytes),
+         ratchet_window_size(copy.ratchet_window_size),
+         failure_tolerance(copy.failure_tolerance),
+         key_ring_size(copy.key_ring_size),
+         key_derivation_algorithm(copy.key_derivation_algorithm) {}
++
++  const std::vector<uint8_t>& derivation_salt() const {
++    return key_derivation_salt.empty() ? ratchet_salt : key_derivation_salt;
++  }
+ };
+ 
+ class KeyProvider : public webrtc::RefCountInterface {
+@@ -204,7 +215,7 @@ class ParticipantKeyHandler : public webrtc::RefCountInterface {
+       current_key_index_ = key_index % crypto_key_ring_.size();
+     }
+     crypto_key_ring_[current_key_index_] =
+-        DeriveKeys(password, key_provider_->options().ratchet_salt, 128);
++        DeriveKeys(password, key_provider_->options().derivation_salt(), 128);
+   }
+ 
+   bool DecryptionFailure() {
+diff --git a/sdk/objc/api/peerconnection/RTCFrameCryptorKeyProvider.h b/sdk/objc/api/peerconnection/RTCFrameCryptorKeyProvider.h
+index 55a65ae..7ef0844 100644
+--- a/sdk/objc/api/peerconnection/RTCFrameCryptorKeyProvider.h
++++ b/sdk/objc/api/peerconnection/RTCFrameCryptorKeyProvider.h
+@@ -23,6 +23,7 @@ NS_ASSUME_NONNULL_BEGIN
+ typedef NS_ENUM(NSUInteger, RTC_OBJC_TYPE(RTCKeyDerivationAlgorithm)) {
+   RTC_OBJC_TYPE(RTCKeyDerivationAlgorithmPBKDF2) = 0,
+   RTC_OBJC_TYPE(RTCKeyDerivationAlgorithmHKDF),
++  RTC_OBJC_TYPE(RTCKeyDerivationAlgorithmHKDFEmptyInfo),
+ };
+ 
+ RTC_OBJC_EXPORT
+@@ -71,6 +72,16 @@ RTC_OBJC_EXPORT
+     discardFrameWhenCryptorNotReady:(BOOL)discardFrameWhenCryptorNotReady
+              keyDerivationAlgorithm:(RTC_OBJC_TYPE(RTCKeyDerivationAlgorithm))keyDerivationAlgorithm;
+ 
++- (instancetype)initWithRatchetSalt:(NSData *)salt
++                  keyDerivationSalt:(nullable NSData *)keyDerivationSalt
++                  ratchetWindowSize:(int)windowSize
++                      sharedKeyMode:(BOOL)sharedKey
++                uncryptedMagicBytes:(nullable NSData *)uncryptedMagicBytes
++                   failureTolerance:(int)failureTolerance
++                        keyRingSize:(int)keyRingSize
++    discardFrameWhenCryptorNotReady:(BOOL)discardFrameWhenCryptorNotReady
++             keyDerivationAlgorithm:(RTC_OBJC_TYPE(RTCKeyDerivationAlgorithm))keyDerivationAlgorithm;
++
+ @end
+ 
+ NS_ASSUME_NONNULL_END
+diff --git a/sdk/objc/api/peerconnection/RTCFrameCryptorKeyProvider.mm b/sdk/objc/api/peerconnection/RTCFrameCryptorKeyProvider.mm
+index 553d6fc..912e639 100644
+--- a/sdk/objc/api/peerconnection/RTCFrameCryptorKeyProvider.mm
++++ b/sdk/objc/api/peerconnection/RTCFrameCryptorKeyProvider.mm
+@@ -82,11 +82,35 @@ - (instancetype)initWithRatchetSalt:(NSData *)salt
+                         keyRingSize:(int)keyRingSize
+     discardFrameWhenCryptorNotReady:(BOOL)discardFrameWhenCryptorNotReady
+              keyDerivationAlgorithm:(RTC_OBJC_TYPE(RTCKeyDerivationAlgorithm))keyDerivationAlgorithm {
++  return [self initWithRatchetSalt:salt
++                  keyDerivationSalt:nil
++                  ratchetWindowSize:windowSize
++                      sharedKeyMode:sharedKey
++                uncryptedMagicBytes:uncryptedMagicBytes
++                   failureTolerance:failureTolerance
++                        keyRingSize:keyRingSize
++    discardFrameWhenCryptorNotReady:discardFrameWhenCryptorNotReady
++             keyDerivationAlgorithm:keyDerivationAlgorithm];
++}
++
++- (instancetype)initWithRatchetSalt:(NSData *)salt
++                  keyDerivationSalt:(nullable NSData *)keyDerivationSalt
++                  ratchetWindowSize:(int)windowSize
++                      sharedKeyMode:(BOOL)sharedKey
++                uncryptedMagicBytes:(nullable NSData *)uncryptedMagicBytes
++                   failureTolerance:(int)failureTolerance
++                        keyRingSize:(int)keyRingSize
++    discardFrameWhenCryptorNotReady:(BOOL)discardFrameWhenCryptorNotReady
++             keyDerivationAlgorithm:(RTC_OBJC_TYPE(RTCKeyDerivationAlgorithm))keyDerivationAlgorithm {
+   self = [super init];
+   if (self) {
+     webrtc::KeyProviderOptions options;
+     options.ratchet_salt = std::vector<uint8_t>((const uint8_t *)salt.bytes,
+                                                 ((const uint8_t *)salt.bytes) + salt.length);
++    if (keyDerivationSalt != nil) {
++      options.key_derivation_salt = std::vector<uint8_t>((const uint8_t *)keyDerivationSalt.bytes,
++                                                        ((const uint8_t *)keyDerivationSalt.bytes) + keyDerivationSalt.length);
++    }
+     options.ratchet_window_size = windowSize;
+     options.shared_key = sharedKey;
+     options.failure_tolerance = failureTolerance;
