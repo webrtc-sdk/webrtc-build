@@ -42,8 +42,6 @@ jobs:
       matrix:
         name:
           - apple
-          - apple_prefixed
-          - apple_prefixed_stripped
     runs-on: macos-26
     steps:
     - uses: actions/checkout@v5
@@ -57,32 +55,11 @@ jobs:
       with:
         name: ${{ steps.build.outputs.framework_name }}.xcframework.zip
         path: build/_package/${{ matrix.name }}/${{ steps.build.outputs.framework_name }}.xcframework.zip
-  build-linux:
-    defaults:
-      run:
-        working-directory: ./build
-    strategy:
-      fail-fast: false
-      matrix:
-        name:
-          - android
-          - android_prefixed
-          - android_prefixed_stripped
-    runs-on: namespace-profile-webrtc-android
-    steps:
-    - uses: actions/checkout@v4
-    - run: ./build.${{ matrix.name }}.sh "${{ github.event.inputs.commitHash }}"
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: webrtc.${{ matrix.name }}.tar.gz
-        path: build/_package/${{ matrix.name }}/webrtc.tar.gz
   create-release:
     name: Create Release
     if: github.ref_type == 'tag'
     needs:
       - build-apple
-      - build-linux
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
