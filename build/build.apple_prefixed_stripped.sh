@@ -19,6 +19,7 @@ STRIPPED_GN_ARGS="
 
 # Same module name (drop-in), distinct artifact name.
 mv "$OUT_DIR/LiveKitWebRTC.xcframework.zip" "$OUT_DIR/LiveKitWebRTC-stripped.xcframework.zip"
+mv "$OUT_DIR/LiveKitWebRTC.xcframework.dSYMs.zip" "$OUT_DIR/LiveKitWebRTC-stripped.xcframework.dSYMs.zip"
 if [[ "$CI" == "true" ]]; then
   echo "framework_name=LiveKitWebRTC-stripped" >> "$GITHUB_OUTPUT"
 fi
