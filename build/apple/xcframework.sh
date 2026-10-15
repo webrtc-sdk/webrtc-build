@@ -58,6 +58,7 @@ COMMON_ARGS="
       rtc_include_tests = false
       rtc_libvpx_build_vp9 = true
       rtc_use_h264 = false
+      strip_absolute_paths_from_debug_symbols = !$DEBUG
       treat_warnings_as_errors = true
       use_rtti = true"
 
