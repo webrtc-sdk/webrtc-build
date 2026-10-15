@@ -45,7 +45,7 @@ end_group() {
 }
 
 COMMON_ARGS="
-      enable_dsyms = $DEBUG
+      enable_dsyms = true
       enable_libaom = true
       enable_stripping = true
       ios_enable_code_signing = false
@@ -187,6 +187,20 @@ ln -s "Versions/Current/$FRAMEWORK_NAME" "$FRAMEWORK_NAME"
 
 cd "$OUT_DIR"
 zip --symlinks -9 -r "$FRAMEWORK_NAME.xcframework.zip" "$FRAMEWORK_NAME.xcframework"
+
+end_group
+
+start_group "Packaging dSYMs"
+
+# Shipped as a separate asset: embedding them would grow the SwiftPM download several-fold.
+DSYMS_NAME="$FRAMEWORK_NAME.xcframework.dSYMs"
+rm -rf "${OUT_DIR:?}/$DSYMS_NAME"
+for i in "${!FRAMEWORK_PATHS[@]}"; do
+  slice="$(basename "$(dirname "${FRAMEWORK_PATHS[$i]}")")"
+  mkdir -p "$OUT_DIR/$DSYMS_NAME/${slice%-lib}"
+  cp -R "${DSYM_PATHS[$i]}" "$OUT_DIR/$DSYMS_NAME/${slice%-lib}/$FRAMEWORK_NAME.framework.dSYM"
+done
+zip -9 -r "$DSYMS_NAME.zip" "$DSYMS_NAME"
 
 end_group
 
