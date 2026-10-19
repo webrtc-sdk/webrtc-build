@@ -163,7 +163,7 @@ DSYM_PATHS=(
 for i in "${!FRAMEWORK_PATHS[@]}"; do
   XCFRAMEWORK_ARGS+=(-framework "${FRAMEWORK_PATHS[$i]}")
 
-  if [[ "$DEBUG" == "true" ]] && [[ -d "${DSYM_PATHS[$i]}" ]]; then
+  if [[ -d "${DSYM_PATHS[$i]}" ]]; then
     XCFRAMEWORK_ARGS+=(-debug-symbols "${DSYM_PATHS[$i]}")
   fi
 done
@@ -188,20 +188,6 @@ ln -s "Versions/Current/$FRAMEWORK_NAME" "$FRAMEWORK_NAME"
 
 cd "$OUT_DIR"
 zip --symlinks -9 -r "$FRAMEWORK_NAME.xcframework.zip" "$FRAMEWORK_NAME.xcframework"
-
-end_group
-
-start_group "Packaging dSYMs"
-
-# Shipped as a separate asset: embedding them would grow the SwiftPM download several-fold.
-DSYMS_NAME="$FRAMEWORK_NAME.xcframework.dSYMs"
-rm -rf "${OUT_DIR:?}/$DSYMS_NAME"
-for i in "${!FRAMEWORK_PATHS[@]}"; do
-  slice="$(basename "$(dirname "${FRAMEWORK_PATHS[$i]}")")"
-  mkdir -p "$OUT_DIR/$DSYMS_NAME/${slice%-lib}"
-  cp -R "${DSYM_PATHS[$i]}" "$OUT_DIR/$DSYMS_NAME/${slice%-lib}/$FRAMEWORK_NAME.framework.dSYM"
-done
-zip -9 -r "$DSYMS_NAME.zip" "$DSYMS_NAME"
 
 end_group
 
