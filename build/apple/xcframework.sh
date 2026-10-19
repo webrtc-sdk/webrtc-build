@@ -163,13 +163,16 @@ DSYM_PATHS=(
 for i in "${!FRAMEWORK_PATHS[@]}"; do
   XCFRAMEWORK_ARGS+=(-framework "${FRAMEWORK_PATHS[$i]}")
 
-  if [[ ! -d "${DSYM_PATHS[$i]}" ]]; then
+  # Xcode names dSYM bundles <Framework>.framework.dSYM; Chromium emits <Framework>.dSYM.
+  dsym="$(dirname "${DSYM_PATHS[$i]}")/$FRAMEWORK_NAME.framework.dSYM"
+  if [[ -d "${DSYM_PATHS[$i]}" && "${DSYM_PATHS[$i]}" != "$dsym" ]]; then
+    rm -rf "$dsym"
+    mv "${DSYM_PATHS[$i]}" "$dsym"
+  fi
+  if [[ ! -d "$dsym" ]]; then
     echo "error: missing dSYM ${DSYM_PATHS[$i]}" >&2
     exit 1
   fi
-  # Xcode names dSYM bundles <Framework>.framework.dSYM; Chromium emits <Framework>.dSYM.
-  dsym="${DSYM_PATHS[$i]%.dSYM}.framework.dSYM"
-  mv "${DSYM_PATHS[$i]}" "$dsym"
   XCFRAMEWORK_ARGS+=(-debug-symbols "$dsym")
 done
 
