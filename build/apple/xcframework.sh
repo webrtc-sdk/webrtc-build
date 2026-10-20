@@ -45,7 +45,7 @@ end_group() {
 }
 
 COMMON_ARGS="
-      enable_dsyms = $DEBUG
+      enable_dsyms = true
       enable_libaom = true
       enable_stripping = true
       ios_enable_code_signing = false
@@ -58,6 +58,7 @@ COMMON_ARGS="
       rtc_include_tests = false
       rtc_libvpx_build_vp9 = true
       rtc_use_h264 = false
+      strip_absolute_paths_from_debug_symbols = !$DEBUG
       treat_warnings_as_errors = true
       use_rtti = true"
 
@@ -162,9 +163,17 @@ DSYM_PATHS=(
 for i in "${!FRAMEWORK_PATHS[@]}"; do
   XCFRAMEWORK_ARGS+=(-framework "${FRAMEWORK_PATHS[$i]}")
 
-  if [[ "$DEBUG" == "true" ]] && [[ -d "${DSYM_PATHS[$i]}" ]]; then
-    XCFRAMEWORK_ARGS+=(-debug-symbols "${DSYM_PATHS[$i]}")
+  # Xcode names dSYM bundles <Framework>.framework.dSYM; Chromium emits <Framework>.dSYM.
+  dsym="$(dirname "${DSYM_PATHS[$i]}")/$FRAMEWORK_NAME.framework.dSYM"
+  if [[ -d "${DSYM_PATHS[$i]}" && "${DSYM_PATHS[$i]}" != "$dsym" ]]; then
+    rm -rf "$dsym"
+    mv "${DSYM_PATHS[$i]}" "$dsym"
   fi
+  if [[ ! -d "$dsym" ]]; then
+    echo "error: missing dSYM ${DSYM_PATHS[$i]}" >&2
+    exit 1
+  fi
+  XCFRAMEWORK_ARGS+=(-debug-symbols "$dsym")
 done
 
 XCFRAMEWORK_ARGS+=(-output "$OUT_DIR/$FRAMEWORK_NAME.xcframework")
