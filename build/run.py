@@ -218,7 +218,9 @@ PATCH_INFO = {
 }
 
 PATCHES = {
-    'apple': [],
+    'apple': [
+        'talk_frame_crypto.patch',
+    ],
     'apple_prefixed': [
         'apple_prefix.patch',
     ],
@@ -239,10 +241,12 @@ PATCHES = {
         'fix_mocks.patch',
     ],
     'macos_arm64': [
+        'talk_frame_crypto.patch',
         'add_license_dav1d.patch',
         'fix_mocks.patch',
     ],
     'ios': [
+        'talk_frame_crypto.patch',
         'add_license_dav1d.patch',
         'fix_mocks.patch',
     ],
