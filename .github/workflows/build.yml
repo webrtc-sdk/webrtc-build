@@ -85,28 +85,28 @@ jobs:
       - build-linux
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    # Each artifact lands in its own artifacts/<artifact name>/ directory.
     - uses: actions/download-artifact@v4
       with:
         path: artifacts
-        name: webrtc.android_prefixed.tar.gz
-    - uses: actions/download-artifact@v4
-      with:
-        path: artifacts
-        name: webrtc.android_prefixed_stripped.tar.gz
-    - uses: actions/download-artifact@v4
-      with:
-        path: artifacts
-        name: LiveKitWebRTC.xcframework.zip
-    - uses: actions/download-artifact@v4
-      with:
-        path: artifacts
-        name: LiveKitWebRTC-stripped.xcframework.zip
+    - name: Collect release assets
+      run: |
+        set -euo pipefail
+        mkdir -p release
+        # Every Android artifact holds a file named webrtc.tar.gz, so publish
+        # each one under its artifact name (webrtc.android*.tar.gz) instead.
+        for name in android android_prefixed android_prefixed_stripped; do
+          cp "artifacts/webrtc.${name}.tar.gz/webrtc.tar.gz" "release/webrtc.${name}.tar.gz"
+        done
+        for name in WebRTC LiveKitWebRTC LiveKitWebRTC-stripped; do
+          cp "artifacts/${name}.xcframework.zip/${name}.xcframework.zip" "release/${name}.xcframework.zip"
+        done
+        (cd release && sha256sum * | tee SHA256SUMS)
     - uses: softprops/action-gh-release@v2
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        files: artifacts/**
+        files: release/*
   publish-xcframework:
     name: Publish
     if: github.ref_type == 'tag'
