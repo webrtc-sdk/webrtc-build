@@ -119,7 +119,7 @@ jobs:
         commit: ${{ inputs.commitHash }}
     - name: Build
       run: |
-        python3 scripts/build.py build ${{ matrix.targets }} --sync-for apple \
+        python3 scripts/build.py build ${{ matrix.targets }} --sync-for apple ${{ steps.cache.outputs.history-arg }} \
           --commit '${{ steps.cache.outputs.commit }}' ${{ steps.cache.outputs.fresh-arg }} $CONFIG_ARGS
     - name: Upload packages
       uses: actions/upload-artifact@v4
@@ -227,10 +227,12 @@ jobs:
       env:
         COMMIT: ${{ steps.cache.outputs.commit }}
         FRESH: ${{ steps.cache.outputs.fresh-arg }}
+        HISTORY: ${{ steps.cache.outputs.history-arg }}
         CONFIGURATION: ${{ inputs.configuration }}
       run: |
         $extra = @('--commit', $env:COMMIT)
         if ($env:FRESH) { $extra += $env:FRESH }
+        if ($env:HISTORY) { $extra += $env:HISTORY }
         if ($env:CONFIGURATION -eq 'debug') { $extra += '--debug' }
         python3 scripts/build.py build libwebrtc_win_${{ matrix.arch }} `
           --libwebrtc-dir libwebrtc --work-dir 'C:\wb' --sync-for libwebrtc_win_x64 @extra

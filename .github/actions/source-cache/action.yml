@@ -10,7 +10,8 @@ description: >
     unchanged. With `force`, pass `fresh-arg` (--fresh) to build.py to rebuild
     it from scratch.
   - none: no cache (GitHub-hosted macOS/Windows: the git mirrors alone exceed
-    the 10GB actions/cache limit, so every job syncs from scratch).
+    the 10GB actions/cache limit, so every job syncs from scratch, shallow:
+    pass `history-arg`).
 
   Jobs sharing a cache must sync with the same target_os: pass the same
   targets to build.py (--sync-for).
@@ -39,6 +40,9 @@ outputs:
   fresh-arg:
     description: '"--fresh" when force is set on a cached backend, else empty; pass to build.py'
     value: ${{ inputs.backend == 'namespace' && inputs.force == 'true' && '--fresh' || '' }}
+  history-arg:
+    description: '"--no-history" without a cache (shallow checkout, far less to download), else empty; pass to build.py'
+    value: ${{ inputs.backend != 'namespace' && '--no-history' || '' }}
 
 runs:
   using: composite

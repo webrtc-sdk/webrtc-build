@@ -342,6 +342,7 @@ class Context:
         self.debug = getattr(args, 'debug', False) or args.op == 'test'
         self.config = 'debug' if self.debug else 'release'
         self.jobs = args.jobs
+        self.no_history = getattr(args, 'no_history', False)
         self.libwebrtc_dir = os.path.abspath(
             args.libwebrtc_dir) if getattr(args, 'libwebrtc_dir', None) else None
 
@@ -469,22 +470,31 @@ def sync(ctx: Context, target_os: List[str]) -> bool:
 
     if not have_src:
         rm_rf(src)
-        run(['git', 'clone', WEBRTC_REPO, src])
+        if ctx.no_history:
+            run(['git', 'init', '-q', src])
+            run(['git', 'remote', 'add', 'origin', WEBRTC_REPO], cwd=src)
+        else:
+            run(['git', 'clone', WEBRTC_REPO, src])
     elif capture(['git', 'remote', 'get-url', 'origin'], cwd=src) != WEBRTC_REPO:
         # A cached checkout from another fork; commits are shared, so keep it.
         run(['git', 'remote', 'set-url', 'origin', WEBRTC_REPO], cwd=src)
 
-    run(['git', 'fetch', 'origin'], cwd=src)
-    if ctx.commit == 'HEAD':
-        run(['git', 'remote', 'set-head', 'origin', '-a'], cwd=src)
-        ref = 'origin/HEAD'
+    if ctx.no_history:
+        # Only the wanted commit (GitHub serves any reachable SHA).
+        run(['git', 'fetch', '--depth', '1', 'origin', ctx.commit], cwd=src)
+        ref = 'FETCH_HEAD'
     else:
-        ref = ctx.commit
-        exists = run(['git', 'cat-file', '-e', f'{ref}^{{commit}}'],
-                     cwd=src, check=False).returncode == 0
-        if not exists:
-            # Commits not reachable from a branch (e.g. PR heads).
-            run(['git', 'fetch', 'origin', ref], cwd=src)
+        run(['git', 'fetch', 'origin'], cwd=src)
+        if ctx.commit == 'HEAD':
+            run(['git', 'remote', 'set-head', 'origin', '-a'], cwd=src)
+            ref = 'origin/HEAD'
+        else:
+            ref = ctx.commit
+            exists = run(['git', 'cat-file', '-e', f'{ref}^{{commit}}'],
+                         cwd=src, check=False).returncode == 0
+            if not exists:
+                # Commits not reachable from a branch (e.g. PR heads).
+                run(['git', 'fetch', 'origin', ref], cwd=src)
     sha = capture(['git', 'rev-parse', f'{ref}^{{commit}}'], cwd=src)
     if up_to_date(sha):
         logging.info('checkout already synced at %s %s; skipping sync', sha, merged)
@@ -516,8 +526,9 @@ def sync(ctx: Context, target_os: List[str]) -> bool:
         # patches a killed job may have left in third_party.
         ctx.applied = None
     else:
+        history = ['--no-history'] if ctx.no_history else ['--with_branch_heads']
         run(['gclient', 'sync', '-D', '--force', '--reset', '--nohooks',
-             '--with_branch_heads', '--jobs=8'], cwd=ctx.gclient_dir)
+             *history, '--jobs=8'], cwd=ctx.gclient_dir)
         run_hooks(ctx)
         ctx.applied = ()
     with open(stamp_path(ctx), 'w') as f:
@@ -969,6 +980,9 @@ def add_common_args(p: argparse.ArgumentParser):
     p.add_argument('--fresh', action='store_true',
                    help='delete the existing checkout (and depot_tools) and sync from scratch')
     p.add_argument('--jobs', type=int, help='ninja parallelism (default: autoninja)')
+    p.add_argument('--no-history', action='store_true',
+                   help='shallow checkout of src and dependencies (much less to download); '
+                        'for throwaway machines, a cached checkout should keep history')
     p.add_argument('--sync-for', nargs='+', default=[], choices=list(TARGETS), metavar='TARGET',
                    help='also sync for these targets (their target_os), so a checkout or git '
                         'cache shared with their jobs stays identical')

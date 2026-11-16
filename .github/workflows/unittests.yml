@@ -112,5 +112,5 @@ jobs:
       - name: Build and run unittests
         run: |
           python3 scripts/build.py test --sync-for ${{ matrix.sync_for }} \
-            ${{ steps.cache.outputs.fresh-arg }} \
+            ${{ steps.cache.outputs.fresh-arg }} ${{ steps.cache.outputs.history-arg }} \
             --work-dir '${{ matrix.work_dir }}' --commit '${{ steps.cache.outputs.commit }}'
