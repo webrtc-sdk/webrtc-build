@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       commitHash:
-        description: 'webrtc-sdk commit hash'
+        description: 'webrtc-sdk/webrtc commit hash (default: WEBRTC_COMMIT in VERSION)'
         default: ''
-        required: true
+        required: false
       configuration:
         description: 'build configuration'
         default: 'release'
@@ -15,6 +15,10 @@ on:
         options:
           - release
           - debug
+      libwebrtcRef:
+        description: 'webrtc-sdk/libwebrtc ref for the libwebrtc builds'
+        default: 'main'
+        required: false
   push:
     paths-ignore:
       - '**.md'
@@ -32,81 +36,150 @@ permissions:
   contents: write
   actions: read
 
+env:
+  COMMIT_ARGS: ${{ github.event.inputs.commitHash && format('--commit {0}', github.event.inputs.commitHash) || '' }}
+  CONFIG_ARGS: ${{ github.event.inputs.configuration == 'debug' && '--debug' || '' }}
+
 jobs:
+  # One webrtc checkout per job; targets in a job share it. Apple is split in
+  # two jobs to stay well under the 6h limit of GitHub-hosted runners.
   build-apple:
-    defaults:
-      run:
-        working-directory: ./build
+    name: build (${{ matrix.id }})
     strategy:
       fail-fast: false
       matrix:
-        name:
-          - apple
-          - apple_prefixed
-          - apple_prefixed_stripped
+        include:
+          - id: apple
+            targets: apple
+          - id: apple-prefixed
+            targets: apple_prefixed apple_prefixed_stripped
     runs-on: macos-26
     steps:
     - uses: actions/checkout@v5
     - name: Select Xcode 26.0
       run: sudo xcode-select --switch /Applications/Xcode_26.0.app/Contents/Developer
     - name: Build
-      id: build
-      run: ./build.${{ matrix.name }}.sh "${{ github.event.inputs.commitHash }}" "${{ github.event.inputs.configuration || 'release' }}"
-    - name: Upload Artifact
+      run: python3 scripts/build.py build ${{ matrix.targets }} $COMMIT_ARGS $CONFIG_ARGS
+    - name: Upload packages
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ steps.build.outputs.framework_name }}.xcframework.zip
-        path: build/_package/${{ matrix.name }}/${{ steps.build.outputs.framework_name }}.xcframework.zip
-  build-linux:
-    defaults:
-      run:
-        working-directory: ./build
-    strategy:
-      fail-fast: false
-      matrix:
-        name:
-          - android
-          - android_prefixed
-          - android_prefixed_stripped
+        name: packages-${{ matrix.id }}
+        path: _package/*
+        compression-level: 0
+
+  build-android:
+    name: build (android)
     runs-on: namespace-profile-webrtc-android
     steps:
     - uses: actions/checkout@v4
-    - run: ./build.${{ matrix.name }}.sh "${{ github.event.inputs.commitHash }}"
-    - name: Upload Artifact
+    - name: Install dependencies
+      run: sudo ./scripts/apt_install_x86_64.sh
+    - name: Build
+      run: python3 scripts/build.py build android android_prefixed android_prefixed_stripped $COMMIT_ARGS $CONFIG_ARGS
+    - name: Upload packages
       uses: actions/upload-artifact@v4
       with:
-        name: webrtc.${{ matrix.name }}.tar.gz
-        path: build/_package/${{ matrix.name }}/webrtc.tar.gz
+        name: packages-android
+        path: _package/*
+        compression-level: 0
+
+  build-libwebrtc-linux:
+    name: build (libwebrtc_linux_${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions/checkout@v5
+      with:
+        repository: webrtc-sdk/libwebrtc
+        ref: ${{ github.event.inputs.libwebrtcRef || 'main' }}
+        path: libwebrtc
+    - name: Free Disk Space (Ubuntu)
+      uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+      with:
+        android: false
+        tool-cache: true
+        dotnet: true
+        haskell: true
+        large-packages: true
+        docker-images: true
+        swap-storage: true
+    - name: Install dependencies
+      run: |
+        sudo ./scripts/apt_install_x86_64.sh
+        sudo apt-get install -y openjdk-11-jdk
+    - name: Build
+      run: python3 scripts/build.py build libwebrtc_linux_${{ matrix.arch }} --libwebrtc-dir libwebrtc $COMMIT_ARGS $CONFIG_ARGS
+    - name: Upload packages
+      uses: actions/upload-artifact@v4
+      with:
+        name: packages-libwebrtc-linux-${{ matrix.arch }}
+        path: _package/*
+        compression-level: 0
+
+  build-libwebrtc-windows:
+    name: build (libwebrtc_win_${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    runs-on: windows-2022
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions/checkout@v5
+      with:
+        repository: webrtc-sdk/libwebrtc
+        ref: ${{ github.event.inputs.libwebrtcRef || 'main' }}
+        path: libwebrtc
+    - name: Build
+      # The D:\ work drive is too small for a webrtc checkout; use C:\.
+      shell: pwsh
+      env:
+        COMMIT_HASH: ${{ github.event.inputs.commitHash }}
+        CONFIGURATION: ${{ github.event.inputs.configuration }}
+      run: |
+        $extra = @()
+        if ($env:COMMIT_HASH) { $extra += @('--commit', $env:COMMIT_HASH) }
+        if ($env:CONFIGURATION -eq 'debug') { $extra += '--debug' }
+        python3 scripts/build.py build libwebrtc_win_${{ matrix.arch }} `
+          --libwebrtc-dir libwebrtc --work-dir 'C:\wb' @extra
+    - name: Upload packages
+      uses: actions/upload-artifact@v4
+      with:
+        name: packages-libwebrtc-win-${{ matrix.arch }}
+        path: C:\wb\_package\*
+        compression-level: 0
+
   create-release:
     name: Create Release
     if: github.ref_type == 'tag'
     needs:
       - build-apple
-      - build-linux
+      - build-android
+      - build-libwebrtc-linux
+      - build-libwebrtc-windows
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
     - uses: actions/download-artifact@v4
       with:
         path: artifacts
-        name: webrtc.android_prefixed.tar.gz
-    - uses: actions/download-artifact@v4
-      with:
-        path: artifacts
-        name: webrtc.android_prefixed_stripped.tar.gz
-    - uses: actions/download-artifact@v4
-      with:
-        path: artifacts
-        name: LiveKitWebRTC.xcframework.zip
-    - uses: actions/download-artifact@v4
-      with:
-        path: artifacts
-        name: LiveKitWebRTC-stripped.xcframework.zip
+        pattern: packages-*
+        merge-multiple: true
+    - name: Aggregate checksums
+      working-directory: artifacts
+      run: |
+        cat *.sha256 > SHA256SUMS.txt
+        cat *.md5 > MD5SUMS.txt
+        ls -l
     - uses: softprops/action-gh-release@v2
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        files: artifacts/**
+        files: artifacts/*
+
   publish-xcframework:
     name: Publish
     if: github.ref_type == 'tag'
@@ -118,7 +191,7 @@ jobs:
     - uses: actions/download-artifact@v4
       with:
         path: artifacts
-        name: LiveKitWebRTC.xcframework.zip
+        name: packages-apple-prefixed
     - name: Render Package.swift and podspec
       id: render
       run: |
