@@ -3,10 +3,11 @@ name: sync
 # Checks that gclient sync works for every host and that the source caches
 # are reused. Durations and sizes are written to the job summary.
 #
-# Caches (see .github/actions/source-cache) are shared with the build and
-# unittests workflows and are updated only when
+# The Linux source cache (see .github/actions/source-cache) is shared with the
+# build and unittests workflows and is updated only when
 #   1. the webrtc commit changes, or
 #   2. force_cache_update is checked (rebuilds the cache from scratch).
+# apple and windows have no cache and always sync from scratch.
 
 on:
   workflow_dispatch:
@@ -31,7 +32,6 @@ on:
 
 permissions:
   contents: read
-  actions: write  # source-cache deletes an entry before re-saving it
 
 jobs:
   plan:
@@ -46,11 +46,11 @@ jobs:
         # android and libwebrtc_linux share one checkout on a Namespace volume.
         all='[
           {"id":"linux","os":"namespace-profile-webrtc-android","backend":"namespace",
-           "targets":"android libwebrtc_linux_x64","work_dir":".","git_cache":""},
-          {"id":"apple","os":"macos-26","backend":"actions",
-           "targets":"apple","work_dir":".","git_cache":"/Users/runner/gclient-cache"},
-          {"id":"windows","os":"windows-2022","backend":"actions",
-           "targets":"libwebrtc_win_x64","work_dir":"C:\\wb","git_cache":"C:\\gclient-cache"}
+           "targets":"android libwebrtc_linux_x64","work_dir":"."},
+          {"id":"apple","os":"macos-26","backend":"none",
+           "targets":"apple","work_dir":"."},
+          {"id":"windows","os":"windows-2022","backend":"none",
+           "targets":"libwebrtc_win_x64","work_dir":"C:\\wb"}
         ]'
         echo "matrix=$(jq -c --arg p "$PLATFORM" '[.[] | select($p == "all" or .id == $p)]' <<< "$all")" >> "$GITHUB_OUTPUT"
 
@@ -76,7 +76,6 @@ jobs:
         id: ${{ matrix.id }}
         commit: ${{ github.event.inputs.commitHash }}
         force: ${{ github.event.inputs.force_cache_update }}
-        git-cache-path: ${{ matrix.git_cache }}
     - name: Sync
       # Ends the step (keeping its log) instead of hanging until the job limit.
       timeout-minutes: 60
@@ -95,6 +94,6 @@ jobs:
         cat '${{ matrix.work_dir }}/_source/webrtc/.gclient' || true
         { echo '```'
           # src/resources should be ~empty: test resources are not cached.
-          du -sh '${{ matrix.work_dir }}/_source/depot_tools' '${{ matrix.work_dir }}/_source/webrtc/src' '${{ matrix.work_dir }}/_source/webrtc/src/resources' ${GIT_CACHE_PATH:+"$GIT_CACHE_PATH"} 2>/dev/null
+          du -sh '${{ matrix.work_dir }}/_source/depot_tools' '${{ matrix.work_dir }}/_source/webrtc/src' '${{ matrix.work_dir }}/_source/webrtc/src/resources' 2>/dev/null
           df -h '${{ matrix.work_dir }}' | tail -1
           echo '```'; } >> "$GITHUB_STEP_SUMMARY"

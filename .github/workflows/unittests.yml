@@ -8,9 +8,18 @@ on:
         default: ''
         required: false
       force_cache_update:
-        description: 'Rebuild the source caches from scratch'
+        description: 'Rebuild the Linux source cache from scratch'
         type: boolean
         default: false
+      platform:
+        description: 'Platform to test'
+        type: choice
+        default: all
+        options:
+          - all
+          - linux
+          - macos
+          - windows
   pull_request:
     paths-ignore:
       - '**.md'
@@ -32,39 +41,38 @@ concurrency:
 
 permissions:
   contents: read
-  actions: write  # source-cache deletes an entry before re-saving it
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+    - id: plan
+      env:
+        PLATFORM: ${{ github.event.inputs.platform || 'all' }}
+      run: |
+        # linux shares the android/libwebrtc_linux source cache, so it syncs
+        # with the same targets (--sync-for) to keep the cache identical.
+        # The D:\ work drive on Windows is too small for a webrtc checkout.
+        all='[
+          {"target":"linux_x86_64","platform":"linux","os":"namespace-profile-webrtc-android",
+           "cache_backend":"namespace","sync_for":"android libwebrtc_linux_x64","work_dir":"."},
+          {"target":"macos_arm64","platform":"macos","os":"macos-26",
+           "cache_backend":"none","sync_for":"apple","work_dir":"."},
+          {"target":"windows_x86_64","platform":"windows","os":"windows-2025",
+           "cache_backend":"none","sync_for":"libwebrtc_win_x64","work_dir":"C:\\webrtc"}
+        ]'
+        echo "matrix=$(jq -c --arg p "$PLATFORM" '[.[] | select($p == "all" or .platform == $p)]' <<< "$all")" >> "$GITHUB_OUTPUT"
+
   unittests:
     name: ${{ matrix.target }}
+    needs: plan
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # Each entry syncs with the same targets (--sync-for) as the build
-          # jobs sharing its source cache, so the cache content stays identical.
-          - target: linux_x86_64
-            os: namespace-profile-webrtc-android
-            cache_backend: namespace
-            cache_id: linux
-            sync_for: android libwebrtc_linux_x64
-            work_dir: .
-          - target: macos_arm64
-            os: macos-26
-            cache_backend: actions
-            cache_id: apple
-            sync_for: apple
-            work_dir: .
-            git_cache: /Users/runner/gclient-cache
-          - target: windows_x86_64
-            os: windows-2025
-            cache_backend: actions
-            cache_id: windows
-            sync_for: libwebrtc_win_x64
-            # The D:\ work drive is too small for a webrtc checkout.
-            work_dir: 'C:\webrtc'
-            git_cache: 'C:\gclient-cache'
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     defaults:
       run:
         shell: bash
@@ -94,10 +102,9 @@ jobs:
         uses: ./.github/actions/source-cache
         with:
           backend: ${{ matrix.cache_backend }}
-          id: ${{ matrix.cache_id }}
+          id: linux
           commit: ${{ github.event.inputs.commitHash }}
           force: ${{ github.event.inputs.force_cache_update || 'false' }}
-          git-cache-path: ${{ matrix.git_cache }}
       - name: Build and run unittests
         run: |
           python3 scripts/build.py test --sync-for ${{ matrix.sync_for }} \

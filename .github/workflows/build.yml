@@ -38,15 +38,16 @@ on:
 permissions:
   packages: write
   contents: write
-  actions: write  # source-cache deletes an entry before re-saving it
+  actions: read
 
 env:
   CONFIG_ARGS: ${{ github.event.inputs.configuration == 'debug' && '--debug' || '' }}
 
-# Source caches (.github/actions/source-cache) are shared with the sync and
-# unittests workflows and updated only when the webrtc commit changes or
-# force_cache_update is checked. Jobs sharing a cache sync the same target_os
-# (--sync-for), so the cache content does not depend on which job wrote it.
+# The Linux source cache (.github/actions/source-cache, Namespace volume) is
+# shared by the android and libwebrtc_linux jobs and the sync and unittests
+# workflows. It is updated only when the webrtc commit changes or
+# force_cache_update is checked. Jobs sharing it sync the same target_os
+# (--sync-for). GitHub-hosted macOS/Windows jobs sync from scratch.
 
 jobs:
   # One webrtc checkout per job; targets in a job share it. Apple is split in
@@ -70,11 +71,8 @@ jobs:
       id: cache
       uses: ./.github/actions/source-cache
       with:
-        backend: actions
-        id: apple
+        backend: none
         commit: ${{ github.event.inputs.commitHash }}
-        force: ${{ github.event.inputs.force_cache_update || 'false' }}
-        git-cache-path: /Users/runner/gclient-cache
     - name: Build
       run: |
         python3 scripts/build.py build ${{ matrix.targets }} --sync-for apple \
@@ -170,11 +168,8 @@ jobs:
       id: cache
       uses: ./.github/actions/source-cache
       with:
-        backend: actions
-        id: windows
+        backend: none
         commit: ${{ github.event.inputs.commitHash }}
-        force: ${{ github.event.inputs.force_cache_update || 'false' }}
-        git-cache-path: 'C:\gclient-cache'
     - name: Build
       # The D:\ work drive is too small for a webrtc checkout; use C:\.
       shell: pwsh
