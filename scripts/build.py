@@ -73,6 +73,9 @@ class Target(NamedTuple):
     cpu: str = ''        # libwebrtc: 'x64' | 'arm64'
 
 
+# Apple targets only need the host default (mac): target_os 'ios' would also
+# check out chromium/src/ios, which the framework builds do not use.
+
 # Software VP9/AV1 removed and optimized for size. H265 stays on Apple: it is
 # VideoToolbox-backed there (no size win) and rtc_use_h265=false does not build
 # the ObjC factories.
@@ -114,16 +117,16 @@ LIBWEBRTC_PATCHES = {
 
 TARGETS: Dict[str, Target] = {
     'apple': Target(
-        kind='apple', host='Darwin', target_os=['ios', 'mac'],
+        kind='apple', host='Darwin', target_os=['mac'],
         patches=[],
         package='WebRTC.xcframework.zip'),
     'apple_prefixed': Target(
-        kind='apple', host='Darwin', target_os=['ios', 'mac'],
+        kind='apple', host='Darwin', target_os=['mac'],
         patches=['apple_prefix.patch'], prefix='LiveKit',
         package='LiveKitWebRTC.xcframework.zip'),
     # Same module name as apple_prefixed (drop-in), distinct file name.
     'apple_prefixed_stripped': Target(
-        kind='apple', host='Darwin', target_os=['ios', 'mac'],
+        kind='apple', host='Darwin', target_os=['mac'],
         patches=['apple_prefix.patch'], prefix='LiveKit',
         extra_gn_args=APPLE_STRIPPED_GN_ARGS,
         package='LiveKitWebRTC-stripped.xcframework.zip'),

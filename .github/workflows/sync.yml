@@ -19,36 +19,49 @@ on:
         description: 'Rebuild the source caches from scratch'
         type: boolean
         default: false
+      platform:
+        description: 'Platform to sync'
+        type: choice
+        default: all
+        options:
+          - all
+          - linux
+          - apple
+          - windows
 
 permissions:
   contents: read
   actions: write  # source-cache deletes an entry before re-saving it
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+    - id: plan
+      env:
+        PLATFORM: ${{ github.event.inputs.platform || 'all' }}
+      run: |
+        # android and libwebrtc_linux share one checkout on a Namespace volume.
+        all='[
+          {"id":"linux","os":"namespace-profile-webrtc-android","backend":"namespace",
+           "targets":"android libwebrtc_linux_x64","work_dir":".","git_cache":""},
+          {"id":"apple","os":"macos-26","backend":"actions",
+           "targets":"apple","work_dir":".","git_cache":"/Users/runner/gclient-cache"},
+          {"id":"windows","os":"windows-2022","backend":"actions",
+           "targets":"libwebrtc_win_x64","work_dir":"C:\\wb","git_cache":"C:\\gclient-cache"}
+        ]'
+        echo "matrix=$(jq -c --arg p "$PLATFORM" '[.[] | select($p == "all" or .id == $p)]' <<< "$all")" >> "$GITHUB_OUTPUT"
+
   sync:
     name: sync (${{ matrix.id }})
+    needs: plan
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # android and libwebrtc_linux share one checkout on a Namespace volume.
-          - id: linux
-            os: namespace-profile-webrtc-android
-            backend: namespace
-            targets: android libwebrtc_linux_x64
-            work_dir: .
-          - id: apple
-            os: macos-26
-            backend: actions
-            targets: apple
-            work_dir: .
-            git_cache: /Users/runner/gclient-cache
-          - id: windows
-            os: windows-2022
-            backend: actions
-            targets: libwebrtc_win_x64
-            work_dir: 'C:\wb'
-            git_cache: 'C:\gclient-cache'
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     defaults:
       run:
