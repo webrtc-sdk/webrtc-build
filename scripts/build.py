@@ -811,7 +811,50 @@ def build_libwebrtc(ctx: Context, name: str, t: Target):
 # Unit tests (rtc_unittests, debug) on the host platform
 # ---------------------------------------------------------------------------
 
+TEST_RESOURCES_BUCKET = 'chromium-webrtc-resources'
+
+
+def test_resources_hook(ctx: Context) -> List[str]:
+    """The DEPS hook that downloads src/resources (audio/video test files)."""
+    scope: Dict = {}
+    with open(os.path.join(ctx.src_dir, 'DEPS')) as f:
+        exec(f.read(), {'Var': lambda name: '{%s}' % name, 'Str': str}, scope)
+    for hook in scope.get('hooks', []):
+        action = list(hook.get('action', []))
+        if TEST_RESOURCES_BUCKET in action:
+            return action
+    raise RuntimeError(f'no DEPS hook downloads from {TEST_RESOURCES_BUCKET}')
+
+
+def fetch_test_resources(ctx: Context):
+    """Download src/resources and check every .sha1 has its file.
+
+    The files are large raw audio/video used only by unit tests. They are kept
+    out of source caches (see clean_outputs) and, since a cached checkout may
+    skip gclient sync, fetched here by running the same hook gclient would.
+    """
+    # gclient runs hooks from the directory holding .gclient.
+    run(test_resources_hook(ctx), cwd=ctx.gclient_dir)
+    resources = os.path.join(ctx.src_dir, 'resources')
+    missing, count, size = [], 0, 0
+    for root, _, files in os.walk(resources):
+        for name in files:
+            if not name.endswith('.sha1'):
+                continue
+            path = os.path.join(root, name[:-len('.sha1')])
+            if os.path.isfile(path):
+                count += 1
+                size += os.path.getsize(path)
+            else:
+                missing.append(os.path.relpath(path, ctx.src_dir))
+    if missing:
+        raise RuntimeError(f'{len(missing)} test resources missing after download, '
+                           f'e.g. {missing[:5]}')
+    logging.info('test resources: %d files, %.2f GB', count, size / 1e9)
+
+
 def run_tests(ctx: Context):
+    fetch_test_resources(ctx)
     apply_patches(ctx, TEST_PATCHES, ('test', *TEST_PATCHES))
     gn_args = [
         'is_debug=true',
@@ -824,9 +867,7 @@ def run_tests(ctx: Context):
     gn_gen(ctx, out, gn_args)
     ninja(ctx, out, ['rtc_unittests'])
     # file_utils_override.cc takes the project root as two levels above the
-    # binary, i.e. src/ for src/out/<dir>, where gclient puts resources/.
-    if not os.path.isdir(os.path.join(ctx.src_dir, 'resources')):
-        raise RuntimeError('src/resources missing; gclient sync did not fetch test resources')
+    # binary, i.e. src/ for src/out/<dir>, where resources/ lives.
     exe = 'rtc_unittests.exe' if HOST == 'Windows' else 'rtc_unittests'
     run([os.path.join(out, exe)], cwd=ctx.src_dir)
 
@@ -862,7 +903,15 @@ def add_common_args(p: argparse.ArgumentParser):
 
 
 def clean_outputs(ctx: Context):
+    """Remove build outputs and downloaded test resources.
+
+    Neither belongs in a source cache: outputs are per build, and the test
+    resources (large raw audio/video, gitignored next to their tracked .sha1
+    files) are fetched by `test` when needed.
+    """
     rm_rf(os.path.join(ctx.src_dir, 'out'))
+    if os.path.isdir(os.path.join(ctx.src_dir, 'resources')):
+        run(['git', 'clean', '-ffdqX', '--', 'resources'], cwd=ctx.src_dir)
 
 
 def cleanup(ctx: Context):

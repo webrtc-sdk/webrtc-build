@@ -44,6 +44,8 @@ Options:
 
 Set `GIT_CACHE_PATH` to reuse a gclient git cache across runs.
 
+Test resources (`src/resources`, large raw audio/video downloaded from Google Storage) are only needed by `test`, which downloads and verifies them on every run. They are removed together with build outputs, so source caches never contain them.
+
 Patches applied per target live in [scripts/patches](scripts/patches).
 
 ## Releasing

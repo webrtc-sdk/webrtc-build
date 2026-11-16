@@ -94,6 +94,7 @@ jobs:
       run: |
         cat '${{ matrix.work_dir }}/_source/webrtc/.gclient' || true
         { echo '```'
-          du -sh '${{ matrix.work_dir }}/_source/depot_tools' '${{ matrix.work_dir }}/_source/webrtc/src' ${GIT_CACHE_PATH:+"$GIT_CACHE_PATH"} 2>/dev/null
+          # src/resources should be ~empty: test resources are not cached.
+          du -sh '${{ matrix.work_dir }}/_source/depot_tools' '${{ matrix.work_dir }}/_source/webrtc/src' '${{ matrix.work_dir }}/_source/webrtc/src/resources' ${GIT_CACHE_PATH:+"$GIT_CACHE_PATH"} 2>/dev/null
           df -h '${{ matrix.work_dir }}' | tail -1
           echo '```'; } >> "$GITHUB_STEP_SUMMARY"
