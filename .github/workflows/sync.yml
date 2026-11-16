@@ -1,9 +1,10 @@
 name: sync
 
-# Checks that gclient sync works for every host and that the source cache is
-# reused. Durations and sizes are written to the job summary.
+# Checks that gclient sync works for every host and that the source caches
+# are reused. Durations and sizes are written to the job summary.
 #
-# Caches are updated only when
+# Caches (see .github/actions/source-cache) are shared with the build and
+# unittests workflows and are updated only when
 #   1. the webrtc commit changes, or
 #   2. force_cache_update is checked (rebuilds the cache from scratch).
 
@@ -21,66 +22,30 @@ on:
 
 permissions:
   contents: read
-  actions: write  # delete a cache entry before re-saving it under the same key
+  actions: write  # source-cache deletes an entry before re-saving it
 
 jobs:
-  # android and libwebrtc_linux share one checkout (target_os android + linux)
-  # kept on a Namespace cache volume. The volume is persisted after every job,
-  # so the update rule is enforced by build.py: with the same commit (and
-  # target_os) as the last successful sync it changes nothing.
-  # force_cache_update passes --fresh, which re-syncs from an empty checkout.
-  linux:
-    name: sync (android + linux)
-    runs-on: namespace-profile-webrtc-android
-    steps:
-    - uses: actions/checkout@v4
-    - name: Mount source cache
-      uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
-      with:
-        path: _source
-    - name: Cache state before sync
-      run: |
-        echo "### android + linux" >> "$GITHUB_STEP_SUMMARY"
-        if [ -d _source/webrtc/src/.git ]; then
-          echo "- cache: **hit** (src at $(git -C _source/webrtc/src rev-parse --short HEAD))" >> "$GITHUB_STEP_SUMMARY"
-        else
-          echo "- cache: **miss**" >> "$GITHUB_STEP_SUMMARY"
-        fi
-    - name: Sync
-      env:
-        COMMIT_HASH: ${{ github.event.inputs.commitHash }}
-        FRESH: ${{ github.event.inputs.force_cache_update == 'true' && '--fresh' || '' }}
-      run: |
-        set -o pipefail
-        start=$(date +%s)
-        python3 scripts/build.py sync android libwebrtc_linux_x64 $FRESH ${COMMIT_HASH:+--commit "$COMMIT_HASH"} 2>&1 | tee sync.log
-        if grep -q 'skipping sync' sync.log; then result='skipped (cache up to date, not updated)'
-        elif [ -n "$FRESH" ]; then result='fresh sync (cache rebuilt)'
-        else result='synced (cache updated)'; fi
-        echo "- sync: $(( $(date +%s) - start ))s, $result" >> "$GITHUB_STEP_SUMMARY"
-    - name: Report
-      if: always()
-      run: |
-        cat _source/webrtc/.gclient
-        { echo '```'; du -sh _source/depot_tools _source/webrtc/src 2>/dev/null; df -h . | tail -1; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-
-  # GitHub-hosted runners: cache the gclient git mirrors (GIT_CACHE_PATH).
-  # The key carries the commit, so a new entry is saved only when the commit
-  # changes; force_cache_update skips the restore and replaces the entry.
-  # The actions/cache entry limit is 10GB; the summary shows whether it fits.
-  hosted:
+  sync:
     name: sync (${{ matrix.id }})
     strategy:
       fail-fast: false
       matrix:
         include:
+          # android and libwebrtc_linux share one checkout on a Namespace volume.
+          - id: linux
+            os: namespace-profile-webrtc-android
+            backend: namespace
+            targets: android libwebrtc_linux_x64
+            work_dir: .
           - id: apple
             os: macos-26
+            backend: actions
             targets: apple
-            work_dir: ${{ github.workspace }}
+            work_dir: .
             git_cache: /Users/runner/gclient-cache
           - id: windows
             os: windows-2022
+            backend: actions
             targets: libwebrtc_win_x64
             work_dir: 'C:\wb'
             git_cache: 'C:\gclient-cache'
@@ -88,46 +53,31 @@ jobs:
     defaults:
       run:
         shell: bash
-    env:
-      GIT_CACHE_PATH: ${{ matrix.git_cache }}
     steps:
     - uses: actions/checkout@v5
-    - name: Resolve commit
-      id: commit
-      env:
-        COMMIT_HASH: ${{ github.event.inputs.commitHash }}
-      run: |
-        c="${COMMIT_HASH:-$(sed -n 's/^WEBRTC_COMMIT=//p' VERSION)}"
-        echo "sha=$c" >> "$GITHUB_OUTPUT"
-    - name: Restore git cache
+    - name: Source cache
       id: cache
-      if: github.event.inputs.force_cache_update != 'true'
-      uses: actions/cache/restore@v4
+      uses: ./.github/actions/source-cache
       with:
-        path: ${{ matrix.git_cache }}
-        key: gclient-git-${{ matrix.id }}-${{ steps.commit.outputs.sha }}
-        restore-keys: gclient-git-${{ matrix.id }}-
+        backend: ${{ matrix.backend }}
+        id: ${{ matrix.id }}
+        commit: ${{ github.event.inputs.commitHash }}
+        force: ${{ github.event.inputs.force_cache_update }}
+        git-cache-path: ${{ matrix.git_cache }}
     - name: Sync
       run: |
-        echo "### ${{ matrix.id }}" >> "$GITHUB_STEP_SUMMARY"
-        echo "- cache: **${{ steps.cache.outputs.cache-matched-key && 'hit' || 'miss' }}** ${{ steps.cache.outputs.cache-matched-key }}" >> "$GITHUB_STEP_SUMMARY"
         start=$(date +%s)
-        python3 scripts/build.py sync ${{ matrix.targets }} --work-dir '${{ matrix.work_dir }}' --commit '${{ steps.commit.outputs.sha }}'
-        echo "- sync: $(( $(date +%s) - start ))s" >> "$GITHUB_STEP_SUMMARY"
-    - name: Report
+        python3 scripts/build.py sync ${{ matrix.targets }} ${{ steps.cache.outputs.fresh-arg }} \
+          --work-dir '${{ matrix.work_dir }}' --commit '${{ steps.cache.outputs.commit }}' 2>&1 | tee sync.log
+        if grep -q 'skipping sync' sync.log; then result='skipped, checkout already at this commit'
+        elif [ -n '${{ steps.cache.outputs.fresh-arg }}' ]; then result='fresh sync'
+        else result='synced'; fi
+        echo "- sync: $(( $(date +%s) - start ))s, $result" >> "$GITHUB_STEP_SUMMARY"
+    - name: Report sizes
       if: always()
       run: |
-        { echo '```'; du -sh "$GIT_CACHE_PATH" '${{ matrix.work_dir }}/_source/webrtc/src' 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-    - name: Delete existing cache entry
-      if: github.event.inputs.force_cache_update == 'true'
-      continue-on-error: true
-      env:
-        GH_TOKEN: ${{ github.token }}
-      run: gh cache delete 'gclient-git-${{ matrix.id }}-${{ steps.commit.outputs.sha }}' -R '${{ github.repository }}' || true
-    - name: Save git cache
-      if: steps.cache.outputs.cache-hit != 'true'
-      continue-on-error: true
-      uses: actions/cache/save@v4
-      with:
-        path: ${{ matrix.git_cache }}
-        key: gclient-git-${{ matrix.id }}-${{ steps.commit.outputs.sha }}
+        cat '${{ matrix.work_dir }}/_source/webrtc/.gclient' || true
+        { echo '```'
+          du -sh '${{ matrix.work_dir }}/_source/depot_tools' '${{ matrix.work_dir }}/_source/webrtc/src' ${GIT_CACHE_PATH:+"$GIT_CACHE_PATH"} 2>/dev/null
+          df -h '${{ matrix.work_dir }}' | tail -1
+          echo '```'; } >> "$GITHUB_STEP_SUMMARY"

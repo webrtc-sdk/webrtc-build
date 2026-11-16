@@ -804,6 +804,9 @@ def add_common_args(p: argparse.ArgumentParser):
     p.add_argument('--fresh', action='store_true',
                    help='delete the existing checkout (and depot_tools) and sync from scratch')
     p.add_argument('--jobs', type=int, help='ninja parallelism (default: autoninja)')
+    p.add_argument('--sync-for', nargs='+', default=[], choices=list(TARGETS), metavar='TARGET',
+                   help='also sync for these targets (their target_os), so a checkout or git '
+                        'cache shared with their jobs stays identical')
 
 
 def main():
@@ -831,15 +834,16 @@ def main():
 
     if args.op in ('build', 'sync'):
         targets = list(dict.fromkeys(args.targets))
-        wrong_host = [n for n in targets if TARGETS[n].host != HOST]
-        if wrong_host:
-            parser.error(f'cannot build {", ".join(wrong_host)} on {HOST}')
-        target_os = sorted({os_ for n in targets for os_ in TARGETS[n].target_os})
+        sync_targets = [*targets, *args.sync_for]
     else:
         if HOST not in TEST_GN_ARGS:
             parser.error(f'unit tests are not supported on {HOST}')
         targets = []
-        target_os = []
+        sync_targets = args.sync_for
+    wrong_host = [n for n in sync_targets if TARGETS[n].host != HOST]
+    if wrong_host:
+        parser.error(f'cannot build {", ".join(wrong_host)} on {HOST}')
+    target_os = sorted({os_ for n in sync_targets for os_ in TARGETS[n].target_os})
 
     ctx = Context(args)
     if args.fresh:

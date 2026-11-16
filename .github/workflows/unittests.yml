@@ -4,9 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       commitHash:
-        description: 'webrtc-sdk commit hash'
+        description: 'webrtc-sdk/webrtc commit hash (default: WEBRTC_COMMIT in VERSION)'
         default: ''
-        required: true
+        required: false
+      force_cache_update:
+        description: 'Rebuild the source caches from scratch'
+        type: boolean
+        default: false
   pull_request:
     paths-ignore:
       - '**.md'
@@ -28,6 +32,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: write  # source-cache deletes an entry before re-saving it
 
 jobs:
   unittests:
@@ -37,28 +42,37 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: ubuntu-24.04_x86_64
-            os: ubuntu-24.04
+          # Each entry syncs with the same targets (--sync-for) as the build
+          # jobs sharing its source cache, so the cache content stays identical.
+          - target: linux_x86_64
+            os: namespace-profile-webrtc-android
+            cache_backend: namespace
+            cache_id: linux
+            sync_for: android libwebrtc_linux_x64
+            work_dir: .
           - target: macos_arm64
             os: macos-26
+            cache_backend: actions
+            cache_id: apple
+            sync_for: apple
+            work_dir: .
+            git_cache: /Users/runner/gclient-cache
           - target: windows_x86_64
             os: windows-2025
+            cache_backend: actions
+            cache_id: windows
+            sync_for: libwebrtc_win_x64
+            # The D:\ work drive is too small for a webrtc checkout.
+            work_dir: 'C:\webrtc'
+            git_cache: 'C:\gclient-cache'
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - name: Disk Cleanup
-        if: runner.os == 'Linux'
-        working-directory: ${{ github.workspace }}
-        run: |
-          df -h
-          docker container prune -f
-          docker image prune -a -f
-          sudo rm -rf /usr/local/share/boost
-          sudo rm -rf /usr/share/dotnet
-          df -h
-      - name: Disk Cleanup
         if: runner.os == 'Windows'
         shell: pwsh
-        working-directory: ${{ github.workspace }}
         run: |
           Get-PSDrive -PSProvider FileSystem | Select-Object Name, Used, Free
           foreach ($dir in @('C:\Android', 'C:\Program Files (x86)\Android', 'C:\Program Files\Google\Chrome', "$env:AGENT_TOOLSDIRECTORY\Ruby", "$env:AGENT_TOOLSDIRECTORY\go", "$env:AGENT_TOOLSDIRECTORY\node")) {
@@ -69,33 +83,23 @@ jobs:
           Get-PSDrive -PSProvider FileSystem | Select-Object Name, Used, Free
       - name: Install dependencies
         if: runner.os == 'Linux'
-        run: sudo ./scripts/apt_install_x86_64.sh
-      - name: Install test dependencies
-        if: runner.os == 'Linux'
-        run: sudo ./scripts/apt_install_test_deps.sh
+        run: |
+          sudo ./scripts/apt_install_x86_64.sh
+          sudo ./scripts/apt_install_test_deps.sh
       - name: Select Xcode 26.0
         if: runner.os == 'macOS'
         run: sudo xcode-select --switch /Applications/Xcode_26.0.app/Contents/Developer
+      - name: Source cache
+        id: cache
+        uses: ./.github/actions/source-cache
+        with:
+          backend: ${{ matrix.cache_backend }}
+          id: ${{ matrix.cache_id }}
+          commit: ${{ github.event.inputs.commitHash }}
+          force: ${{ github.event.inputs.force_cache_update || 'false' }}
+          git-cache-path: ${{ matrix.git_cache }}
       - name: Build and run unittests
-        if: runner.os != 'Windows'
-        env:
-          COMMIT_HASH: ${{ github.event.inputs.commitHash }}
         run: |
-          if [ -n "$COMMIT_HASH" ]; then
-            python3 scripts/build.py test --commit "$COMMIT_HASH"
-          else
-            python3 scripts/build.py test
-          fi
-      - name: Build and run unittests
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          COMMIT_HASH: ${{ github.event.inputs.commitHash }}
-        run: |
-          # Put the checkout and build output on C:\ because the D:\ work
-          # drive is too small.
-          $extra = @()
-          if ($env:COMMIT_HASH) {
-            $extra = @('--commit', $env:COMMIT_HASH)
-          }
-          python3 scripts/build.py test --work-dir 'C:\webrtc' @extra
+          python3 scripts/build.py test --sync-for ${{ matrix.sync_for }} \
+            ${{ steps.cache.outputs.fresh-arg }} \
+            --work-dir '${{ matrix.work_dir }}' --commit '${{ steps.cache.outputs.commit }}'

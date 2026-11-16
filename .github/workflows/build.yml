@@ -19,6 +19,10 @@ on:
         description: 'webrtc-sdk/libwebrtc ref for the libwebrtc builds'
         default: 'main'
         required: false
+      force_cache_update:
+        description: 'Rebuild the source caches from scratch'
+        type: boolean
+        default: false
   push:
     paths-ignore:
       - '**.md'
@@ -34,11 +38,15 @@ on:
 permissions:
   packages: write
   contents: write
-  actions: read
+  actions: write  # source-cache deletes an entry before re-saving it
 
 env:
-  COMMIT_ARGS: ${{ github.event.inputs.commitHash && format('--commit {0}', github.event.inputs.commitHash) || '' }}
   CONFIG_ARGS: ${{ github.event.inputs.configuration == 'debug' && '--debug' || '' }}
+
+# Source caches (.github/actions/source-cache) are shared with the sync and
+# unittests workflows and updated only when the webrtc commit changes or
+# force_cache_update is checked. Jobs sharing a cache sync the same target_os
+# (--sync-for), so the cache content does not depend on which job wrote it.
 
 jobs:
   # One webrtc checkout per job; targets in a job share it. Apple is split in
@@ -58,8 +66,19 @@ jobs:
     - uses: actions/checkout@v5
     - name: Select Xcode 26.0
       run: sudo xcode-select --switch /Applications/Xcode_26.0.app/Contents/Developer
+    - name: Source cache
+      id: cache
+      uses: ./.github/actions/source-cache
+      with:
+        backend: actions
+        id: apple
+        commit: ${{ github.event.inputs.commitHash }}
+        force: ${{ github.event.inputs.force_cache_update || 'false' }}
+        git-cache-path: /Users/runner/gclient-cache
     - name: Build
-      run: python3 scripts/build.py build ${{ matrix.targets }} $COMMIT_ARGS $CONFIG_ARGS
+      run: |
+        python3 scripts/build.py build ${{ matrix.targets }} --sync-for apple \
+          --commit '${{ steps.cache.outputs.commit }}' ${{ steps.cache.outputs.fresh-arg }} $CONFIG_ARGS
     - name: Upload packages
       uses: actions/upload-artifact@v4
       with:
@@ -74,8 +93,19 @@ jobs:
     - uses: actions/checkout@v4
     - name: Install dependencies
       run: sudo ./scripts/apt_install_x86_64.sh
+    - name: Source cache
+      id: cache
+      uses: ./.github/actions/source-cache
+      with:
+        backend: namespace
+        id: linux
+        commit: ${{ github.event.inputs.commitHash }}
+        force: ${{ github.event.inputs.force_cache_update || 'false' }}
     - name: Build
-      run: python3 scripts/build.py build android android_prefixed android_prefixed_stripped $COMMIT_ARGS $CONFIG_ARGS
+      run: |
+        python3 scripts/build.py build android android_prefixed android_prefixed_stripped \
+          --sync-for libwebrtc_linux_x64 \
+          --commit '${{ steps.cache.outputs.commit }}' ${{ steps.cache.outputs.fresh-arg }} $CONFIG_ARGS
     - name: Upload packages
       uses: actions/upload-artifact@v4
       with:
@@ -89,7 +119,8 @@ jobs:
       fail-fast: false
       matrix:
         arch: [x64, arm64]
-    runs-on: ubuntu-latest
+    # Same runner profile as android: shares its source cache volume.
+    runs-on: namespace-profile-webrtc-android
     steps:
     - uses: actions/checkout@v5
     - uses: actions/checkout@v5
@@ -97,22 +128,23 @@ jobs:
         repository: webrtc-sdk/libwebrtc
         ref: ${{ github.event.inputs.libwebrtcRef || 'main' }}
         path: libwebrtc
-    - name: Free Disk Space (Ubuntu)
-      uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
-      with:
-        android: false
-        tool-cache: true
-        dotnet: true
-        haskell: true
-        large-packages: true
-        docker-images: true
-        swap-storage: true
     - name: Install dependencies
       run: |
         sudo ./scripts/apt_install_x86_64.sh
         sudo apt-get install -y openjdk-11-jdk
+    - name: Source cache
+      id: cache
+      uses: ./.github/actions/source-cache
+      with:
+        backend: namespace
+        id: linux
+        commit: ${{ github.event.inputs.commitHash }}
+        force: ${{ github.event.inputs.force_cache_update || 'false' }}
     - name: Build
-      run: python3 scripts/build.py build libwebrtc_linux_${{ matrix.arch }} --libwebrtc-dir libwebrtc $COMMIT_ARGS $CONFIG_ARGS
+      run: |
+        python3 scripts/build.py build libwebrtc_linux_${{ matrix.arch }} --libwebrtc-dir libwebrtc \
+          --sync-for android libwebrtc_linux_x64 \
+          --commit '${{ steps.cache.outputs.commit }}' ${{ steps.cache.outputs.fresh-arg }} $CONFIG_ARGS
     - name: Upload packages
       uses: actions/upload-artifact@v4
       with:
@@ -134,18 +166,28 @@ jobs:
         repository: webrtc-sdk/libwebrtc
         ref: ${{ github.event.inputs.libwebrtcRef || 'main' }}
         path: libwebrtc
+    - name: Source cache
+      id: cache
+      uses: ./.github/actions/source-cache
+      with:
+        backend: actions
+        id: windows
+        commit: ${{ github.event.inputs.commitHash }}
+        force: ${{ github.event.inputs.force_cache_update || 'false' }}
+        git-cache-path: 'C:\gclient-cache'
     - name: Build
       # The D:\ work drive is too small for a webrtc checkout; use C:\.
       shell: pwsh
       env:
-        COMMIT_HASH: ${{ github.event.inputs.commitHash }}
+        COMMIT: ${{ steps.cache.outputs.commit }}
+        FRESH: ${{ steps.cache.outputs.fresh-arg }}
         CONFIGURATION: ${{ github.event.inputs.configuration }}
       run: |
-        $extra = @()
-        if ($env:COMMIT_HASH) { $extra += @('--commit', $env:COMMIT_HASH) }
+        $extra = @('--commit', $env:COMMIT)
+        if ($env:FRESH) { $extra += $env:FRESH }
         if ($env:CONFIGURATION -eq 'debug') { $extra += '--debug' }
         python3 scripts/build.py build libwebrtc_win_${{ matrix.arch }} `
-          --libwebrtc-dir libwebrtc --work-dir 'C:\wb' @extra
+          --libwebrtc-dir libwebrtc --work-dir 'C:\wb' --sync-for libwebrtc_win_x64 @extra
     - name: Upload packages
       uses: actions/upload-artifact@v4
       with:

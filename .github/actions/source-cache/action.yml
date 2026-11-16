@@ -1,0 +1,105 @@
+name: webrtc source cache
+description: >
+  Restore the webrtc source cache shared by the build, unittests and sync
+  workflows. Caches are updated only when the webrtc commit changes or when
+  `force` is set.
+
+  - namespace: mounts a Namespace cache volume on ./_source (the whole
+    checkout). The volume is persisted after every job; build.py leaves it
+    untouched when the commit and target_os match its last sync. With `force`,
+    pass --fresh to build.py to rebuild it.
+  - actions: caches the gclient git mirrors (GIT_CACHE_PATH) with
+    actions/cache, keyed by commit; the entry is saved at the end of a
+    successful job only when the key did not match exactly. With `force`, the
+    entry is deleted and nothing is restored, so it is rebuilt and re-saved.
+    Needs `permissions: actions: write` for the delete.
+
+  Jobs sharing a cache must sync with the same target_os: pass the same
+  targets to build.py (`test --sync-for ...` for unit tests).
+
+inputs:
+  backend:
+    description: 'namespace | actions'
+    required: true
+  id:
+    description: 'cache family shared across workflows: linux | apple | windows'
+    required: true
+  commit:
+    description: 'webrtc commit (default: WEBRTC_COMMIT in VERSION)'
+    required: false
+    default: ''
+  force:
+    description: 'rebuild the cache from scratch'
+    required: false
+    default: 'false'
+  git-cache-path:
+    description: 'actions backend: directory for the gclient git mirrors'
+    required: false
+    default: ''
+
+outputs:
+  commit:
+    description: 'resolved webrtc commit'
+    value: ${{ steps.commit.outputs.sha }}
+  fresh-arg:
+    description: '"--fresh" when force is set, else empty; pass to build.py'
+    value: ${{ inputs.force == 'true' && '--fresh' || '' }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve commit
+      id: commit
+      shell: bash
+      env:
+        COMMIT: ${{ inputs.commit }}
+      run: |
+        c="${COMMIT:-$(sed -n 's/^WEBRTC_COMMIT=//p' VERSION | tr -d '\r')}"
+        echo "sha=$c" >> "$GITHUB_OUTPUT"
+
+    - name: Mount source cache volume
+      if: inputs.backend == 'namespace'
+      uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
+      with:
+        path: _source
+
+    - name: Report cache volume state
+      if: inputs.backend == 'namespace'
+      shell: bash
+      run: |
+        if [ -f _source/webrtc/.sync_stamp.json ]; then
+          echo "- source cache (${{ inputs.id }}): **hit**, last sync $(cat _source/webrtc/.sync_stamp.json)" >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "- source cache (${{ inputs.id }}): **miss**" >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+    - name: Set GIT_CACHE_PATH
+      if: inputs.backend == 'actions'
+      shell: bash
+      run: echo "GIT_CACHE_PATH=${{ inputs.git-cache-path }}" >> "$GITHUB_ENV"
+
+    - name: Delete cache entry (force)
+      if: inputs.backend == 'actions' && inputs.force == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: gh cache delete 'gclient-git-${{ inputs.id }}-${{ steps.commit.outputs.sha }}' -R '${{ github.repository }}' || true
+
+    # Saves in its post step (job success only) when the key missed.
+    - name: Restore git cache
+      id: cache
+      if: inputs.backend == 'actions'
+      uses: actions/cache@v4
+      with:
+        path: ${{ inputs.git-cache-path }}
+        key: gclient-git-${{ inputs.id }}-${{ steps.commit.outputs.sha }}
+        restore-keys: ${{ inputs.force != 'true' && format('gclient-git-{0}-', inputs.id) || '' }}
+
+    - name: Report git cache state
+      if: inputs.backend == 'actions'
+      shell: bash
+      run: |
+        if [ '${{ steps.cache.outputs.cache-hit }}' = 'true' ]; then state='hit (not updated)'
+        elif [ -n '${{ steps.cache.outputs.cache-matched-key }}' ]; then state='partial hit ${{ steps.cache.outputs.cache-matched-key }} (will save new commit)'
+        else state='miss (will save)'; fi
+        echo "- git cache (${{ inputs.id }}): **$state**" >> "$GITHUB_STEP_SUMMARY"
