@@ -12,6 +12,7 @@ Usage:
     python3 scripts/build.py build libwebrtc_linux_x64 --libwebrtc-dir ../libwebrtc
     python3 scripts/build.py build libwebrtc_win_arm64 --work-dir C:\\wb --libwebrtc-dir ..\\libwebrtc
     python3 scripts/build.py test
+    python3 scripts/build.py sync android libwebrtc_linux_x64   # checkout only
 
 The webrtc commit defaults to WEBRTC_COMMIT in ./VERSION (repository root).
 
@@ -766,9 +767,14 @@ def main():
     tp = sub.add_parser('test', help='build and run rtc_unittests (debug) for the host')
     add_common_args(tp)
 
+    sp = sub.add_parser('sync', help='fetch and gclient sync the checkout for the given targets')
+    sp.add_argument('targets', nargs='+', choices=list(TARGETS), metavar='TARGET',
+                    help=', '.join(TARGETS))
+    add_common_args(sp)
+
     args = parser.parse_args()
 
-    if args.op == 'build':
+    if args.op in ('build', 'sync'):
         targets = list(dict.fromkeys(args.targets))
         wrong_host = [n for n in targets if TARGETS[n].host != HOST]
         if wrong_host:
@@ -788,6 +794,8 @@ def main():
     else:
         sync(ctx, target_os)
 
+    if args.op == 'sync':
+        return
     if args.op == 'test':
         run_tests(ctx)
         return

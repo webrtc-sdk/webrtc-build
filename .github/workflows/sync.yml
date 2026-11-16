@@ -1,0 +1,108 @@
+name: sync
+
+# Checks that gclient sync works for every host and that the source cache is
+# reused. Run it twice: the second run should restore the cache and sync much
+# faster. Durations and sizes are written to the job summary.
+
+on:
+  workflow_dispatch:
+    inputs:
+      commitHash:
+        description: 'webrtc-sdk/webrtc commit hash (default: WEBRTC_COMMIT in VERSION)'
+        default: ''
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  # android and libwebrtc_linux share one checkout (target_os android + linux)
+  # kept on a Namespace cache volume, so later syncs are incremental.
+  linux:
+    name: sync (android + linux)
+    runs-on: namespace-profile-webrtc-android
+    steps:
+    - uses: actions/checkout@v4
+    - name: Mount source cache
+      uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
+      with:
+        path: _source
+    - name: Cache state before sync
+      run: |
+        echo "### android + linux" >> "$GITHUB_STEP_SUMMARY"
+        if [ -d _source/webrtc/src/.git ]; then
+          echo "- cache: **hit** (src at $(git -C _source/webrtc/src rev-parse --short HEAD))" >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "- cache: **miss**" >> "$GITHUB_STEP_SUMMARY"
+        fi
+    - name: Sync
+      env:
+        COMMIT_HASH: ${{ github.event.inputs.commitHash }}
+      run: |
+        start=$(date +%s)
+        python3 scripts/build.py sync android libwebrtc_linux_x64 ${COMMIT_HASH:+--commit "$COMMIT_HASH"}
+        echo "- sync: $(( $(date +%s) - start ))s" >> "$GITHUB_STEP_SUMMARY"
+    - name: Report
+      if: always()
+      run: |
+        cat _source/webrtc/.gclient
+        { echo '```'; du -sh _source/depot_tools _source/webrtc/src 2>/dev/null; df -h . | tail -1; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+  # GitHub-hosted runners: cache the gclient git mirrors (GIT_CACHE_PATH).
+  # The actions/cache entry limit is 10GB; the summary shows whether it fits.
+  hosted:
+    name: sync (${{ matrix.id }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: apple
+            os: macos-26
+            targets: apple
+            work_dir: ${{ github.workspace }}
+            git_cache: /Users/runner/gclient-cache
+          - id: windows
+            os: windows-2022
+            targets: libwebrtc_win_x64
+            work_dir: 'C:\wb'
+            git_cache: 'C:\gclient-cache'
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      GIT_CACHE_PATH: ${{ matrix.git_cache }}
+    steps:
+    - uses: actions/checkout@v5
+    - name: Resolve commit
+      id: commit
+      env:
+        COMMIT_HASH: ${{ github.event.inputs.commitHash }}
+      run: |
+        c="${COMMIT_HASH:-$(sed -n 's/^WEBRTC_COMMIT=//p' VERSION)}"
+        echo "sha=$c" >> "$GITHUB_OUTPUT"
+    - name: Restore git cache
+      id: cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ matrix.git_cache }}
+        key: gclient-git-${{ matrix.id }}-${{ steps.commit.outputs.sha }}
+        restore-keys: gclient-git-${{ matrix.id }}-
+    - name: Sync
+      run: |
+        echo "### ${{ matrix.id }}" >> "$GITHUB_STEP_SUMMARY"
+        echo "- cache: **${{ steps.cache.outputs.cache-matched-key && 'hit' || 'miss' }}** ${{ steps.cache.outputs.cache-matched-key }}" >> "$GITHUB_STEP_SUMMARY"
+        start=$(date +%s)
+        python3 scripts/build.py sync ${{ matrix.targets }} --work-dir '${{ matrix.work_dir }}' --commit '${{ steps.commit.outputs.sha }}'
+        echo "- sync: $(( $(date +%s) - start ))s" >> "$GITHUB_STEP_SUMMARY"
+    - name: Report
+      if: always()
+      run: |
+        { echo '```'; du -sh "$GIT_CACHE_PATH" '${{ matrix.work_dir }}/_source/webrtc/src' 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+    - name: Save git cache
+      if: steps.cache.outputs.cache-hit != 'true'
+      continue-on-error: true
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ matrix.git_cache }}
+        key: gclient-git-${{ matrix.id }}-${{ steps.commit.outputs.sha }}
