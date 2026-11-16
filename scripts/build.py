@@ -268,6 +268,8 @@ def rm_rf(path: str):
 def link_dir(link: str, target: str):
     """Point `link` at directory `target` (a junction on Windows, which
     needs no symlink privilege)."""
+    if os.path.realpath(link) == os.path.realpath(target):
+        return  # already that directory (or a link to it)
     rm_rf(link)
     if HOST == 'Windows':
         subprocess.run(['cmd', '/c', 'mklink', '/J', link, target],
@@ -334,8 +336,11 @@ class Context:
         self.src_dir = os.path.join(self.gclient_dir, 'src')
         self.depot_tools_dir = os.path.join(self.source_dir, 'depot_tools')
         # Build outputs live outside _source (which may be a cache volume);
-        # src/out links here.
-        self.out_root = os.path.join(self.work_dir, '_out', 'build')
+        # src/out links here. Not on Windows: siso cannot resolve paths through
+        # a directory junction, and Windows jobs have no source cache anyway.
+        self.link_out = HOST != 'Windows'
+        self.out_root = (os.path.join(self.work_dir, '_out', 'build') if self.link_out
+                         else os.path.join(self.src_dir, 'out'))
         self.package_dir = os.path.abspath(
             args.package_dir or os.path.join(self.work_dir, '_package'))
         # Unit tests always build debug.
@@ -999,7 +1004,8 @@ def clean_outputs(ctx: Context):
     files) are fetched by `test` when needed.
     """
     rm_rf(ctx.out_root)
-    rm_rf(os.path.join(os.path.dirname(ctx.out_root), 'resources'))  # test link
+    if ctx.link_out:
+        rm_rf(os.path.join(os.path.dirname(ctx.out_root), 'resources'))  # test link
     # The src/out link (older checkouts: a real src/out directory).
     rm_rf(os.path.join(ctx.src_dir, 'out'))
     if os.path.isdir(os.path.join(ctx.src_dir, 'resources')):
@@ -1088,7 +1094,8 @@ def main():
         if not args.no_sync:
             sync(ctx, target_os)
         mkdir_p(ctx.out_root)
-        link_dir(os.path.join(ctx.src_dir, 'out'), ctx.out_root)
+        if ctx.link_out:
+            link_dir(os.path.join(ctx.src_dir, 'out'), ctx.out_root)
 
         if args.op == 'test':
             run_tests(ctx)
