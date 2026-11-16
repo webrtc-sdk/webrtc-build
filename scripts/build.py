@@ -451,6 +451,28 @@ def run_hooks(ctx: Context):
             os.rename(hidden, resources)
 
 
+def deepen_to_change_id(repo: str):
+    """Fetch history in a shallow checkout until it has a Change-Id commit.
+
+    The lastchange hook (build/util/lastchange.py) derives LASTCHANGE, and
+    from it the Windows linker /TIMESTAMP, from the newest commit with a
+    Change-Id in src/build. src/build is the webrtc-sdk/build fork, whose own
+    commits on top of Chromium have none, so a depth-1 checkout (gclient
+    --no-history) yields no commit time and lld-link fails with "invalid
+    timestamp".
+    """
+    head = capture(['git', 'rev-parse', 'HEAD'], cwd=repo)
+    for depth in (50, 200, 1000):
+        if capture(['git', 'log', '-1', '--format=%H', '--grep=^Change-Id:', 'HEAD'], cwd=repo):
+            return
+        if capture(['git', 'rev-parse', '--is-shallow-repository'], cwd=repo) != 'true':
+            break
+        run(['git', 'fetch', '-q', f'--depth={depth}', 'origin', head], cwd=repo)
+    if (not capture(['git', 'log', '-1', '--format=%H', '--grep=^Change-Id:', 'HEAD'], cwd=repo)
+            and capture(['git', 'rev-parse', '--is-shallow-repository'], cwd=repo) == 'true'):
+        run(['git', 'fetch', '-q', '--unshallow', 'origin', head], cwd=repo)
+
+
 def sync(ctx: Context, target_os: List[str]) -> bool:
     """Check out ctx.commit with its dependencies.
 
@@ -477,11 +499,8 @@ def sync(ctx: Context, target_os: List[str]) -> bool:
         ctx.applied = None
         return False
 
-    # src keeps its full history even with --no-history: build/util/
-    # lastchange.py derives LASTCHANGE (and the Windows linker /TIMESTAMP)
-    # from the newest commit with a Change-Id, which a shallow fork checkout
-    # does not have ("lld-link: invalid timestamp"). webrtc alone is small;
-    # the dependencies are what --no-history saves.
+    # src is always a full clone: webrtc alone is small; the dependencies are
+    # what --no-history saves.
     if not have_src:
         rm_rf(src)
         run(['git', 'clone', WEBRTC_REPO, src])
@@ -534,6 +553,8 @@ def sync(ctx: Context, target_os: List[str]) -> bool:
         history = ['--no-history'] if ctx.no_history else ['--with_branch_heads']
         run(['gclient', 'sync', '-D', '--force', '--reset', '--nohooks',
              *history, '--jobs=8'], cwd=ctx.gclient_dir)
+        if ctx.no_history:
+            deepen_to_change_id(os.path.join(src, 'build'))
         run_hooks(ctx)
         ctx.applied = ()
     with open(stamp_path(ctx), 'w') as f:
