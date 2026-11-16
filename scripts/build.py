@@ -31,6 +31,7 @@ libwebrtc build scripts from webrtc-sdk/libwebrtc.
 
 import argparse
 import hashlib
+import json
 import logging
 import os
 import platform
@@ -319,11 +320,15 @@ def read_gclient_target_os(path: str) -> List[str]:
     return list(scope.get('target_os', []))
 
 
-def write_gclient(ctx: Context, target_os: List[str]):
-    path = os.path.join(ctx.gclient_dir, '.gclient')
+def merged_target_os(ctx: Context, target_os: List[str]) -> List[str]:
     # Only grow target_os: removing an OS would make `gclient sync -D` delete
     # its dependencies from a cached checkout.
-    merged = sorted(set(read_gclient_target_os(path)) | set(target_os))
+    path = os.path.join(ctx.gclient_dir, '.gclient')
+    return sorted(set(read_gclient_target_os(path)) | set(target_os))
+
+
+def write_gclient(ctx: Context, merged: List[str]):
+    path = os.path.join(ctx.gclient_dir, '.gclient')
     content = (
         'solutions = [\n'
         '  {\n'
@@ -341,16 +346,52 @@ def write_gclient(ctx: Context, target_os: List[str]):
     logging.info('.gclient target_os = %s', merged)
 
 
-def sync(ctx: Context, target_os: List[str]):
+def stamp_path(ctx: Context) -> str:
+    return os.path.join(ctx.gclient_dir, '.sync_stamp.json')
+
+
+def read_stamp(ctx: Context) -> Dict:
+    try:
+        with open(stamp_path(ctx)) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def is_full_sha(ref: str) -> bool:
+    return len(ref) == 40 and all(c in '0123456789abcdef' for c in ref.lower())
+
+
+def sync(ctx: Context, target_os: List[str]) -> bool:
+    """Check out ctx.commit with its dependencies.
+
+    Returns False when the checkout already matches (same commit and
+    target_os as the last successful sync) and nothing was changed, so a
+    persisted source cache is only updated when the commit changes.
+    """
     mkdir_p(ctx.gclient_dir)
     if HOST == 'Windows':
         run(['git', 'config', '--global', 'core.longpaths', 'true'])
-    write_gclient(ctx, target_os)
-
-    if not os.path.isdir(os.path.join(ctx.src_dir, '.git')):
-        run(['git', 'clone', WEBRTC_REPO, ctx.src_dir])
-
+    merged = merged_target_os(ctx, target_os)
     src = ctx.src_dir
+    stamp = read_stamp(ctx)
+    have_src = os.path.isdir(os.path.join(src, '.git'))
+
+    def up_to_date(sha: str) -> bool:
+        return (have_src and stamp.get('commit') == sha
+                and stamp.get('target_os') == merged)
+
+    # Full SHA: decide without touching the network.
+    if is_full_sha(ctx.commit) and up_to_date(ctx.commit.lower()):
+        logging.info('checkout already synced at %s %s; skipping sync', ctx.commit, merged)
+        # A previous build may have left patches applied.
+        ctx.applied = None
+        return False
+
+    if not have_src:
+        rm_rf(src)
+        run(['git', 'clone', WEBRTC_REPO, src])
+
     run(['git', 'fetch', 'origin'], cwd=src)
     if ctx.commit == 'HEAD':
         run(['git', 'remote', 'set-head', 'origin', '-a'], cwd=src)
@@ -362,12 +403,24 @@ def sync(ctx: Context, target_os: List[str]):
         if not exists:
             # Commits not reachable from a branch (e.g. PR heads).
             run(['git', 'fetch', 'origin', ref], cwd=src)
-    run(['git', 'checkout', '-f', ref], cwd=src)
+    sha = capture(['git', 'rev-parse', f'{ref}^{{commit}}'], cwd=src)
+    if up_to_date(sha):
+        logging.info('checkout already synced at %s %s; skipping sync', sha, merged)
+        ctx.applied = None
+        return False
+
+    # Invalidate first so an interrupted sync is never taken as complete.
+    rm_rf(stamp_path(ctx))
+    write_gclient(ctx, merged)
+    run(['git', 'checkout', '-f', sha], cwd=src)
     run(['git', 'clean', '-df'], cwd=src)
     run(['gclient', 'sync', '-D', '--force', '--reset',
          '--with_branch_heads', '--jobs=8'], cwd=ctx.gclient_dir)
+    with open(stamp_path(ctx), 'w') as f:
+        json.dump({'commit': sha, 'target_os': merged}, f)
     ctx.applied = ()
-    logging.info('webrtc at %s', capture(['git', 'rev-parse', 'HEAD'], cwd=src))
+    logging.info('webrtc synced at %s', sha)
+    return True
 
 
 def reset_tree(ctx: Context):
@@ -748,6 +801,8 @@ def add_common_args(p: argparse.ArgumentParser):
     p.add_argument('--package-dir', help='output directory (default: <work-dir>/_package)')
     p.add_argument('--no-sync', action='store_true',
                    help='build the existing checkout without fetching or gclient sync')
+    p.add_argument('--fresh', action='store_true',
+                   help='delete the existing checkout (and depot_tools) and sync from scratch')
     p.add_argument('--jobs', type=int, help='ninja parallelism (default: autoninja)')
 
 
@@ -787,6 +842,12 @@ def main():
         target_os = []
 
     ctx = Context(args)
+    if args.fresh:
+        if args.no_sync:
+            parser.error('--fresh and --no-sync are mutually exclusive')
+        # Remove the children, not _source itself: it may be a cache mount.
+        rm_rf(ctx.gclient_dir)
+        rm_rf(ctx.depot_tools_dir)
     setup_environment(ctx)
     if args.no_sync:
         if not os.path.isdir(ctx.src_dir):
