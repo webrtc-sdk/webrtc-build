@@ -98,7 +98,7 @@ jobs:
 
   sync-apple:
     if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
-    name: sync (apple)
+    name: gclient sync (apple)
     runs-on: macos-26
     outputs:
       commit: ${{ steps.cache.outputs.commit }}
@@ -189,7 +189,7 @@ jobs:
   # compile job mounts it, so its own sync is skipped or a quick catch-up.
   sync-linux:
     if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
-    name: sync (linux)
+    name: gclient sync (linux)
     runs-on: namespace-profile-webrtc-android
     outputs:
       commit: ${{ steps.cache.outputs.commit }}
