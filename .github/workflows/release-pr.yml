@@ -1,0 +1,65 @@
+name: release-pr
+
+# Opens release/<version>: VERSION points at the newest commit of the webrtc
+# default branch (or the given commit) and the PR body lists the webrtc commits
+# since the previous release. release-pr-refresh keeps it up to date; merging it
+# publishes the release (release.yml).
+#
+# Token: RELEASE_TOKEN (GitHub App token or PAT with contents/pull-requests
+# write) lets the PR trigger the build workflow. With the default GITHUB_TOKEN
+# the PR is created but its checks have to be started by hand.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version, e.g. 150.7871.08'
+        required: true
+      commit:
+        description: 'webrtc commit (default: newest commit of the default branch)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  WEBRTC_REPO: ${{ vars.WEBRTC_REPO || 'webrtc-sdk/webrtc' }}
+
+jobs:
+  open:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+    - name: Prepare VERSION and notes
+      id: prep
+      env:
+        VERSION: ${{ inputs.version }}
+        COMMIT: ${{ inputs.commit }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        python3 scripts/release.py check-version "$VERSION"
+        if git ls-remote --exit-code origin "refs/heads/release/$VERSION" >/dev/null; then
+          echo "::error::branch release/$VERSION already exists"; exit 1
+        fi
+        if [ -z "$COMMIT" ]; then
+          COMMIT=$(git ls-remote "https://github.com/$WEBRTC_REPO.git" HEAD | cut -f1)
+        elif [ ${#COMMIT} -ne 40 ]; then
+          COMMIT=$(gh api "repos/$WEBRTC_REPO/commits/$COMMIT" --jq .sha)
+        fi
+        BASE=$(python3 scripts/release.py get --key WEBRTC_COMMIT)
+        python3 scripts/release.py set-version "$VERSION" --commit "$COMMIT"
+        python3 scripts/release.py notes --base "$BASE" --head "$COMMIT" --version "$VERSION" --out "$RUNNER_TEMP/notes.md"
+        cat "$RUNNER_TEMP/notes.md" >> "$GITHUB_STEP_SUMMARY"
+        echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
+    - uses: peter-evans/create-pull-request@v7
+      with:
+        token: ${{ secrets.RELEASE_TOKEN || github.token }}
+        branch: release/${{ inputs.version }}
+        commit-message: 'Release ${{ inputs.version }}'
+        title: 'Release ${{ inputs.version }}'
+        body-path: ${{ runner.temp }}/notes.md
+        labels: release
+        add-paths: VERSION

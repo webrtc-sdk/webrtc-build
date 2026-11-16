@@ -33,6 +33,9 @@ on:
 permissions:
   contents: read
 
+env:
+  WEBRTC_REPO_URL: https://github.com/${{ vars.WEBRTC_REPO || 'webrtc-sdk/webrtc' }}.git
+
 jobs:
   plan:
     runs-on: ubuntu-latest

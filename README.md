@@ -50,6 +50,18 @@ Patches applied per target live in [scripts/patches](scripts/patches).
 
 ## Releasing
 
-1. Update [VERSION](VERSION) with the version number and the `webrtc-sdk/webrtc` commit.
-2. Tag the release: `git tag m<version>` (the `m` prefix is required by CI).
-3. Push the tag and wait for the `build` workflow to create the release.
+Releases are driven by pull requests:
+
+1. Run the **release-pr** workflow with the new version (e.g. `150.7871.08`). It opens `release/<version>` with [VERSION](VERSION) pointing at the newest commit of the webrtc default branch (or a given commit), and the PR body lists the webrtc commits since the previous release. The PR's `build` checks produce every package.
+2. **release-pr-refresh** keeps the PR current: on each webrtc push (`repository_dispatch: webrtc-updated`) and hourly it bumps `WEBRTC_COMMIT` to the newest commit and rewrites the commit list. Add the `pin` label to freeze the commit.
+3. Merge the PR. **release** reuses the packages of the PR's last successful build (or rebuilds), creates the `m<version>` release with the commit list, every package and `SHA256SUMS.txt` / `MD5SUMS.txt`, publishes LiveKitWebRTC, and notifies downstream repositories (`repository_dispatch: webrtc-release`).
+
+Configuration:
+
+| Name | Kind | Purpose |
+|---|---|---|
+| `RELEASE_TOKEN` | secret | App token or PAT used for release PR pushes so they trigger `build` (falls back to `GITHUB_TOKEN`, which does not). |
+| `DOWNSTREAM_TOKEN` | secret | Token allowed to send `repository_dispatch` to the downstream repositories. |
+| `XCFRAMEWORK_PAT` | secret | Publishes LiveKitWebRTC to livekit/webrtc-xcframework. |
+| `WEBRTC_REPO` | variable | webrtc repository (`owner/name`), default `webrtc-sdk/webrtc`. |
+| `DOWNSTREAM_REPOS` | variable | Space-separated repositories to notify, default `webrtc-sdk/Specs webrtc-sdk/android`. |

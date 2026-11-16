@@ -1,10 +1,14 @@
 name: build
 
+# Builds every release package. Runs on release PRs (release-pr.yml), by hand,
+# and from release.yml when a merged release PR has no successful build to reuse.
+# Publishing lives in release.yml.
+
 on:
   workflow_dispatch:
     inputs:
       commitHash:
-        description: 'webrtc-sdk/webrtc commit hash (default: WEBRTC_COMMIT in VERSION)'
+        description: 'webrtc commit hash (default: WEBRTC_COMMIT in VERSION)'
         default: ''
         required: false
       configuration:
@@ -20,28 +24,42 @@ on:
         default: 'main'
         required: false
       force_cache_update:
-        description: 'Rebuild the source caches from scratch'
+        description: 'Rebuild the Linux source cache from scratch'
         type: boolean
         default: false
-  push:
-    paths-ignore:
-      - '**.md'
-      - 'LICENSE'
-      - 'NOTICE'
-      - '.gitignore'
-      - '.dockerignore'
-    branches-ignore:
-      - daily
-    tags:
-      - '*'
+  workflow_call:
+    inputs:
+      commitHash:
+        type: string
+        default: ''
+      configuration:
+        type: string
+        default: 'release'
+      libwebrtcRef:
+        type: string
+        default: 'main'
+      force_cache_update:
+        type: boolean
+        default: false
+  pull_request:
+    branches: [main]
+    paths:
+      - 'VERSION'
+      - 'scripts/**'
+      - '.github/workflows/build.yml'
+      - '.github/actions/**'
+
+concurrency:
+  # A newer push to a release PR supersedes the running build.
+  group: build-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 permissions:
-  packages: write
-  contents: write
-  actions: read
+  contents: read
 
 env:
-  CONFIG_ARGS: ${{ github.event.inputs.configuration == 'debug' && '--debug' || '' }}
+  CONFIG_ARGS: ${{ inputs.configuration == 'debug' && '--debug' || '' }}
+  WEBRTC_REPO_URL: https://github.com/${{ vars.WEBRTC_REPO || 'webrtc-sdk/webrtc' }}.git
 
 # The Linux source cache (.github/actions/source-cache, Namespace volume) is
 # shared by the android and libwebrtc_linux jobs and the sync and unittests
@@ -72,7 +90,7 @@ jobs:
       uses: ./.github/actions/source-cache
       with:
         backend: none
-        commit: ${{ github.event.inputs.commitHash }}
+        commit: ${{ inputs.commitHash }}
     - name: Build
       run: |
         python3 scripts/build.py build ${{ matrix.targets }} --sync-for apple \
@@ -97,8 +115,8 @@ jobs:
       with:
         backend: namespace
         id: linux
-        commit: ${{ github.event.inputs.commitHash }}
-        force: ${{ github.event.inputs.force_cache_update || 'false' }}
+        commit: ${{ inputs.commitHash }}
+        force: ${{ inputs.force_cache_update || 'false' }}
     - name: Build
       run: |
         python3 scripts/build.py build android android_prefixed android_prefixed_stripped \
@@ -124,7 +142,7 @@ jobs:
     - uses: actions/checkout@v5
       with:
         repository: webrtc-sdk/libwebrtc
-        ref: ${{ github.event.inputs.libwebrtcRef || 'main' }}
+        ref: ${{ inputs.libwebrtcRef || 'main' }}
         path: libwebrtc
     - name: Install dependencies
       run: |
@@ -136,8 +154,8 @@ jobs:
       with:
         backend: namespace
         id: linux
-        commit: ${{ github.event.inputs.commitHash }}
-        force: ${{ github.event.inputs.force_cache_update || 'false' }}
+        commit: ${{ inputs.commitHash }}
+        force: ${{ inputs.force_cache_update || 'false' }}
     - name: Build
       run: |
         python3 scripts/build.py build libwebrtc_linux_${{ matrix.arch }} --libwebrtc-dir libwebrtc \
@@ -162,21 +180,21 @@ jobs:
     - uses: actions/checkout@v5
       with:
         repository: webrtc-sdk/libwebrtc
-        ref: ${{ github.event.inputs.libwebrtcRef || 'main' }}
+        ref: ${{ inputs.libwebrtcRef || 'main' }}
         path: libwebrtc
     - name: Source cache
       id: cache
       uses: ./.github/actions/source-cache
       with:
         backend: none
-        commit: ${{ github.event.inputs.commitHash }}
+        commit: ${{ inputs.commitHash }}
     - name: Build
       # The D:\ work drive is too small for a webrtc checkout; use C:\.
       shell: pwsh
       env:
         COMMIT: ${{ steps.cache.outputs.commit }}
         FRESH: ${{ steps.cache.outputs.fresh-arg }}
-        CONFIGURATION: ${{ github.event.inputs.configuration }}
+        CONFIGURATION: ${{ inputs.configuration }}
       run: |
         $extra = @('--commit', $env:COMMIT)
         if ($env:FRESH) { $extra += $env:FRESH }
@@ -189,65 +207,3 @@ jobs:
         name: packages-libwebrtc-win-${{ matrix.arch }}
         path: C:\wb\_package\*
         compression-level: 0
-
-  create-release:
-    name: Create Release
-    if: github.ref_type == 'tag'
-    needs:
-      - build-apple
-      - build-android
-      - build-libwebrtc-linux
-      - build-libwebrtc-windows
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/download-artifact@v4
-      with:
-        path: artifacts
-        pattern: packages-*
-        merge-multiple: true
-    - name: Aggregate checksums
-      working-directory: artifacts
-      run: |
-        cat *.sha256 > SHA256SUMS.txt
-        cat *.md5 > MD5SUMS.txt
-        ls -l
-    - uses: softprops/action-gh-release@v2
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        files: artifacts/*
-
-  publish-xcframework:
-    name: Publish
-    if: github.ref_type == 'tag'
-    needs:
-      - create-release
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - uses: actions/download-artifact@v4
-      with:
-        path: artifacts
-        name: packages-apple-prefixed
-    - name: Render Package.swift and podspec
-      id: render
-      run: |
-        # Build tags are prefixed with m (m144.7559.13); hosting repo tags are not.
-        VERSION="${GITHUB_REF_NAME#m}"
-        CHECKSUM=$(sha256sum artifacts/LiveKitWebRTC.xcframework.zip | awk '{print $1}')
-        echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-        mkdir -p out
-        for f in Package.swift LiveKitWebRTC.podspec; do
-          sed -e "s|{{VERSION}}|${VERSION}|g" \
-              -e "s|{{CHECKSUM}}|${CHECKSUM}|g" \
-              ".github/templates/$f" > "out/$f"
-        done
-    - uses: livekit/publish-xcframework-action@3b8645334fb62b0fd1d7067067819bcd111db157 # main
-      with:
-        xcframework-zip: artifacts/LiveKitWebRTC.xcframework.zip
-        version: ${{ steps.render.outputs.version }}
-        hosting-repo: livekit/webrtc-xcframework
-        files: |
-          out/Package.swift:Package.swift
-          out/LiveKitWebRTC.podspec:LiveKitWebRTC.podspec
-        token: ${{ secrets.XCFRAMEWORK_PAT }}

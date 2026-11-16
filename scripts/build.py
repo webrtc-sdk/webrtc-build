@@ -53,7 +53,8 @@ SCRIPT_DIR = os.path.abspath(os.path.dirname(__file__))
 ROOT_DIR = os.path.dirname(SCRIPT_DIR)
 PATCH_DIR = os.path.join(SCRIPT_DIR, 'patches')
 
-WEBRTC_REPO = 'https://github.com/webrtc-sdk/webrtc.git'
+# Overridable to build from a fork (e.g. in a test repository).
+WEBRTC_REPO = os.environ.get('WEBRTC_REPO_URL') or 'https://github.com/webrtc-sdk/webrtc.git'
 DEPOT_TOOLS_REPO = 'https://chromium.googlesource.com/chromium/tools/depot_tools.git'
 
 HOST = platform.system()  # 'Darwin' | 'Linux' | 'Windows'
@@ -442,6 +443,9 @@ def sync(ctx: Context, target_os: List[str]) -> bool:
     if not have_src:
         rm_rf(src)
         run(['git', 'clone', WEBRTC_REPO, src])
+    elif capture(['git', 'remote', 'get-url', 'origin'], cwd=src) != WEBRTC_REPO:
+        # A cached checkout from another fork; commits are shared, so keep it.
+        run(['git', 'remote', 'set-url', 'origin', WEBRTC_REPO], cwd=src)
 
     run(['git', 'fetch', 'origin'], cwd=src)
     if ctx.commit == 'HEAD':
