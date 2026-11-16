@@ -90,8 +90,9 @@ jobs:
         name: packages-dry-run
         path: _package/*
 
-  # One webrtc checkout per job; targets in a job share it. Apple is split in
-  # two jobs to stay well under the 6h limit of GitHub-hosted runners.
+  # GitHub-hosted macOS jobs cannot share a checkout, so each apple variant
+  # syncs in its own parallel job: 11 slices per variant on a 3-core runner
+  # already take hours, and two in one job risk the 6h job limit.
   build-apple:
     if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
     name: build (${{ matrix.id }})
@@ -102,7 +103,9 @@ jobs:
           - id: apple
             targets: apple
           - id: apple-prefixed
-            targets: apple_prefixed apple_prefixed_stripped
+            targets: apple_prefixed
+          - id: apple-prefixed-stripped
+            targets: apple_prefixed_stripped
     runs-on: macos-26
     steps:
     - uses: actions/checkout@v5
