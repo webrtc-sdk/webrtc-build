@@ -5,9 +5,9 @@ name: release-pr
 # since the previous release. release-pr-refresh keeps it up to date; merging it
 # publishes the release (release.yml).
 #
-# Token: RELEASE_TOKEN (GitHub App token or PAT with contents/pull-requests
-# write) lets the PR trigger the build workflow. With the default GITHUB_TOKEN
-# the PR is created but its checks have to be started by hand.
+# Token: a GitHub App (variable RELEASE_APP_CLIENT_ID, secret
+# RELEASE_APP_PRIVATE_KEY) lets the PR trigger the build workflow. Without it
+# the PR is created with GITHUB_TOKEN and its checks have to be started by hand.
 
 on:
   workflow_dispatch:
@@ -31,6 +31,18 @@ jobs:
   open:
     runs-on: ubuntu-latest
     steps:
+    # Pushes and PRs made with a GitHub App token trigger workflows (the PR
+    # checks); GITHUB_TOKEN ones do not. Skipped when the App is not set up.
+    - name: Create GitHub App token
+      id: app
+      if: vars.RELEASE_APP_CLIENT_ID != ''
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+        private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+        permission-contents: write
+        permission-pull-requests: write
+        permission-issues: write
     - uses: actions/checkout@v5
     - name: Prepare VERSION and notes
       id: prep
@@ -56,7 +68,7 @@ jobs:
         echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
     - uses: peter-evans/create-pull-request@v7
       with:
-        token: ${{ secrets.RELEASE_TOKEN || github.token }}
+        token: ${{ steps.app.outputs.token || github.token }}
         branch: release/${{ inputs.version }}
         commit-message: 'Release ${{ inputs.version }}'
         title: 'Release ${{ inputs.version }}'

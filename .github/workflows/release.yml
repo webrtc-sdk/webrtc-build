@@ -8,7 +8,9 @@ name: release
 #   4. notify downstream repositories (repository_dispatch `webrtc-release`).
 #
 # Secrets: XCFRAMEWORK_PAT (livekit publish, skipped when unset),
-# DOWNSTREAM_TOKEN (dispatch to vars.DOWNSTREAM_REPOS, skipped when unset).
+# GitHub App (variable RELEASE_APP_CLIENT_ID, secret RELEASE_APP_PRIVATE_KEY,
+# installed on vars.DOWNSTREAM_REPOS) for the downstream dispatch, skipped when
+# unset.
 
 on:
   pull_request:
@@ -200,18 +202,41 @@ jobs:
     needs: [prepare, publish-release]
     if: always() && needs.publish-release.result == 'success'
     runs-on: ubuntu-latest
+    env:
+      REPOS: ${{ vars.DOWNSTREAM_REPOS || 'webrtc-sdk/Specs webrtc-sdk/android' }}
     steps:
+    - name: Resolve downstream repositories
+      id: repos
+      run: |
+        set -euo pipefail
+        list=$(tr ' ' '\n' <<< "$REPOS" | grep .)
+        owners=$(cut -d/ -f1 <<< "$list" | sort -u)
+        if [ "$(wc -l <<< "$owners")" -ne 1 ]; then
+          echo "::error::DOWNSTREAM_REPOS must share one owner (one App installation): $REPOS"; exit 1
+        fi
+        echo "owner=$owners" >> "$GITHUB_OUTPUT"
+        echo "names=$(cut -d/ -f2 <<< "$list" | paste -sd, -)" >> "$GITHUB_OUTPUT"
+    - name: Create GitHub App token
+      id: app
+      if: vars.RELEASE_APP_CLIENT_ID != ''
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+        private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+        owner: ${{ steps.repos.outputs.owner }}
+        repositories: ${{ steps.repos.outputs.names }}
+        # POST /repos/{repo}/dispatches needs contents: write.
+        permission-contents: write
     - name: Dispatch webrtc-release
       env:
-        GH_TOKEN: ${{ secrets.DOWNSTREAM_TOKEN }}
-        REPOS: ${{ vars.DOWNSTREAM_REPOS || 'webrtc-sdk/Specs webrtc-sdk/android' }}
+        GH_TOKEN: ${{ steps.app.outputs.token }}
         VERSION: ${{ needs.prepare.outputs.version }}
         TAG: ${{ needs.publish-release.outputs.tag }}
         COMMIT: ${{ needs.prepare.outputs.commit }}
         URL: ${{ needs.publish-release.outputs.url }}
       run: |
         set -euo pipefail
-        if [ -z "$GH_TOKEN" ]; then echo "::notice::DOWNSTREAM_TOKEN not set; skipping"; exit 0; fi
+        if [ -z "$GH_TOKEN" ]; then echo "::notice::GitHub App not configured (RELEASE_APP_CLIENT_ID); skipping"; exit 0; fi
         for repo in $REPOS; do
           gh api "repos/$repo/dispatches" -f event_type=webrtc-release \
             -f "client_payload[version]=$VERSION" -f "client_payload[tag]=$TAG" \

@@ -60,8 +60,8 @@ Configuration:
 
 | Name | Kind | Purpose |
 |---|---|---|
-| `RELEASE_TOKEN` | secret | App token or PAT used for release PR pushes so they trigger `build` (falls back to `GITHUB_TOKEN`, which does not). |
-| `DOWNSTREAM_TOKEN` | secret | Token allowed to send `repository_dispatch` to the downstream repositories. |
+| `RELEASE_APP_CLIENT_ID` | variable | Client ID of the release GitHub App. Its tokens push and open the release PRs, so the PRs trigger `build` (without the App: `GITHUB_TOKEN`, which does not), and send `repository_dispatch` to the downstream repositories (skipped without the App). |
+| `RELEASE_APP_PRIVATE_KEY` | secret | Private key (`.pem`) of the release GitHub App. |
 | `XCFRAMEWORK_PAT` | secret | Publishes LiveKitWebRTC to livekit/webrtc-xcframework. |
 | `WEBRTC_REPO` | variable | webrtc repository (`owner/name`), default `webrtc-sdk/webrtc`. |
-| `DOWNSTREAM_REPOS` | variable | Space-separated repositories to notify, default `webrtc-sdk/Specs webrtc-sdk/android`. |
+| `DOWNSTREAM_REPOS` | variable | Space-separated repositories to notify, default `webrtc-sdk/Specs webrtc-sdk/android`. They must share one owner, with the App installed on them. |
