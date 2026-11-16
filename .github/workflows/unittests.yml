@@ -36,7 +36,8 @@ on:
       - '.gitignore'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Per platform, so manual single-platform runs do not cancel each other.
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.inputs.platform || 'all' }}
   cancel-in-progress: true
 
 permissions:
