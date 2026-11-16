@@ -36,6 +36,7 @@ libwebrtc build scripts from webrtc-sdk/libwebrtc.
 """
 
 import argparse
+import glob
 import hashlib
 import json
 import logging
@@ -45,6 +46,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import threading
 import time
 import zipfile
@@ -348,6 +350,8 @@ class Context:
         self.config = 'debug' if self.debug else 'release'
         self.jobs = args.jobs
         self.no_history = getattr(args, 'no_history', False)
+        self.apple_slices = getattr(args, 'apple_slices', None) or []
+        self.android_archs = getattr(args, 'android_archs', None) or []
         self.libwebrtc_dir = os.path.abspath(
             args.libwebrtc_dir) if getattr(args, 'libwebrtc_dir', None) else None
 
@@ -658,12 +662,27 @@ def apple_common_gn_args(debug: bool) -> List[str]:
     ]
 
 
+APPLE_SLICES = [name for name, _ in APPLE_PLATFORMS]
+
+
+def apple_slice_archive(package_dir: str, name: str, slice_name: str) -> str:
+    return os.path.join(package_dir, 'apple-slices', f'{name}-{slice_name}.tar')
+
+
 def build_apple(ctx: Context, name: str, t: Target):
+    """Build the xcframework, or with --apple-slices only those slices.
+
+    CI builds every slice in its own job (each producing a tar under
+    _package/apple-slices) and then runs `assemble-apple` per target.
+    """
     apply_patches(ctx, t.patches, tuple(t.patches))
     fw = f'{t.prefix}WebRTC'
     out = ctx.out_dir(name)
+    slices = ctx.apple_slices or APPLE_SLICES
 
     for platform_name, platform_args in APPLE_PLATFORMS:
+        if platform_name not in slices:
+            continue
         print(f'::group::{name}: {platform_name}', flush=True)
         slice_dir = os.path.join(out, platform_name)
         # Target-specific args last: GN keeps the last assignment.
@@ -672,6 +691,48 @@ def build_apple(ctx: Context, name: str, t: Target):
         bundle = 'mac_framework_bundle' if 'macOS' in platform_name else 'ios_framework_bundle'
         ninja(ctx, slice_dir, [bundle])
         print('::endgroup::', flush=True)
+
+    license_path = os.path.join(ctx.src_dir, 'LICENSE')
+    if not ctx.apple_slices:
+        assemble_apple(ctx, name, t, out, license_path)
+        return
+
+    # One tar per slice: keeps the framework symlinks, which artifact zips drop.
+    for slice_name in slices:
+        archive = apple_slice_archive(ctx.package_dir, name, slice_name)
+        mkdir_p(os.path.dirname(archive))
+        rm_rf(archive)
+        with tarfile.open(archive, 'w') as tar:
+            tar.add(license_path, arcname='LICENSE')
+            for bundle in (f'{fw}.framework', f'{fw}.dSYM'):
+                path = os.path.join(out, slice_name, bundle)
+                if not os.path.exists(path):
+                    raise RuntimeError(f'missing {path}')
+                tar.add(path, arcname=f'{slice_name}/{bundle}')
+        logging.info('slice archive: %s', archive)
+
+
+def assemble_apple_from_slices(ctx: Context, name: str, t: Target, slices_dir: str):
+    """Unpack the per-slice tars of `name` and build its xcframework zip."""
+    out = os.path.join(ctx.work_dir, '_out', 'assemble', name)
+    rm_rf(out)
+    mkdir_p(out)
+    for slice_name in APPLE_SLICES:
+        archive = apple_slice_archive(slices_dir, name, slice_name)
+        if not os.path.exists(archive):
+            # download-artifact may flatten the apple-slices/ directory.
+            archive = os.path.join(slices_dir, os.path.basename(archive))
+        if not os.path.exists(archive):
+            raise RuntimeError(f'missing slice archive for {name} {slice_name} in {slices_dir}')
+        with tarfile.open(archive) as tar:
+            tar.extractall(out)
+    assemble_apple(ctx, name, t, out, os.path.join(out, 'LICENSE'))
+
+
+def assemble_apple(ctx: Context, name: str, t: Target, out: str, license_path: str):
+    """lipo the slices in `out` into universal binaries, then create, fix up
+    and zip the xcframework."""
+    fw = f'{t.prefix}WebRTC'
 
     # Universal binaries.
     for lib, base, slices in APPLE_UNIVERSAL:
@@ -707,7 +768,7 @@ def build_apple(ctx: Context, name: str, t: Target):
         xc_args += ['-debug-symbols', dsym]
     run([*xc_args, '-output', xcframework])
 
-    shutil.copy2(os.path.join(ctx.src_dir, 'LICENSE'), xcframework)
+    shutil.copy2(license_path, xcframework)
 
     # macOS and Catalyst frameworks must use the versioned bundle layout.
     for slice_id in ('macos-arm64_x86_64', 'ios-arm64_x86_64-maccatalyst'):
@@ -764,17 +825,65 @@ def build_android(ctx: Context, name: str, t: Target):
     ]
     out = ctx.out_dir(name)
     mkdir_p(out)
+    archs = ctx.android_archs or ANDROID_ARCHS
     aar = os.path.join(out, 'libwebrtc.aar')
     cmd = [sys.executable, os.path.join('tools_webrtc', 'android', 'build_aar.py'),
            '--build-dir', out,
            '--output', aar,
-           '--arch', *ANDROID_ARCHS,
+           '--arch', *archs,
            '--extra-gn-args', gn_args_str(gn_args)]
     if ctx.jobs:
         # '=' form: argparse would read a bare '-j8' as an option.
         cmd += [f'--extra-ninja-switches=-j{ctx.jobs}']
     run(cmd, cwd=ctx.src_dir)
-    publish(ctx, aar, t.package)
+    if not ctx.android_archs:
+        publish(ctx, aar, t.package)
+        return
+    # A partial aar for assemble-android (CI builds each arch in its own job).
+    part = android_part_path(ctx.package_dir, name, archs)
+    mkdir_p(os.path.dirname(part))
+    shutil.copy2(aar, part)
+    logging.info('partial aar: %s', part)
+
+
+def android_part_path(package_dir: str, name: str, archs: List[str]) -> str:
+    return os.path.join(package_dir, 'android-parts', f'{name}-{"+".join(archs)}.aar')
+
+
+def assemble_android(ctx: Context, name: str, t: Target, parts_dir: str):
+    """Merge per-arch aars of `name` into one aar.
+
+    An aar is AndroidManifest.xml + classes.jar (arch independent) plus
+    jni/<arch>/*.so; build_aar.py takes the common files from the first arch,
+    so do the same.
+    """
+    parts = sorted(glob.glob(os.path.join(parts_dir, '**', f'{name}-*.aar'), recursive=True))
+    by_arch: Dict[str, str] = {}
+    for part in parts:
+        for arch in os.path.basename(part)[len(name) + 1:-len('.aar')].split('+'):
+            if arch in by_arch:
+                raise RuntimeError(f'{arch} is in both {by_arch[arch]} and {part}')
+            by_arch[arch] = part
+    missing = [a for a in ANDROID_ARCHS if a not in by_arch]
+    if missing:
+        raise RuntimeError(f'{name}: no partial aar for {", ".join(missing)} in {parts_dir}')
+
+    out = os.path.join(ctx.work_dir, '_out', 'assemble', f'{name}.aar')
+    mkdir_p(os.path.dirname(out))
+    rm_rf(out)
+    with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as dst:
+        with zipfile.ZipFile(by_arch[ANDROID_ARCHS[0]]) as base:
+            for item in base.infolist():
+                if not item.filename.startswith('jni/'):
+                    dst.writestr(item, base.read(item))
+        for arch in ANDROID_ARCHS:
+            with zipfile.ZipFile(by_arch[arch]) as src:
+                entries = [i for i in src.infolist() if i.filename.startswith(f'jni/{arch}/')]
+                if not entries:
+                    raise RuntimeError(f'{by_arch[arch]} has no jni/{arch}/')
+                for item in entries:
+                    dst.writestr(item, src.read(item))
+    publish(ctx, out, t.package)
 
 
 # ---------------------------------------------------------------------------
@@ -1033,7 +1142,29 @@ def main():
     bp.add_argument('--debug', action='store_true')
     bp.add_argument('--libwebrtc-dir',
                     help='webrtc-sdk/libwebrtc checkout (libwebrtc_* targets)')
+    bp.add_argument('--apple-slices', type=lambda v: [x for x in v.split(',') if x],
+                    help='apple targets: build only these comma-separated slices and archive '
+                         'each one for assemble-apple (see apple-slices)')
+    bp.add_argument('--android-archs', type=lambda v: [x for x in v.split(',') if x],
+                    help='android targets: build only these comma-separated archs into a '
+                         'partial aar for assemble-android (see android-archs)')
     add_common_args(bp)
+
+    dp = sub.add_parser('assemble-android', help='merge the per-arch aars of an android target')
+    dp.add_argument('target', choices=[n for n, t in TARGETS.items() if t.kind == 'android'])
+    dp.add_argument('--parts-dir', required=True, help='directory with the partial aars')
+    add_common_args(dp)
+
+    sub.add_parser('android-archs', help='print the android archs as JSON')
+
+    ap = sub.add_parser('assemble-apple',
+                        help='build the xcframework zip of an apple target from slice archives')
+    ap.add_argument('target', choices=[n for n, t in TARGETS.items() if t.kind == 'apple'])
+    ap.add_argument('--slices-dir', required=True, help='directory with the slice tars')
+    ap.add_argument('--debug', action='store_true')
+    add_common_args(ap)
+
+    sub.add_parser('apple-slices', help='print the apple slice names as JSON')
 
     tp = sub.add_parser('test', help='build and run rtc_unittests (debug) for the host')
     add_common_args(tp)
@@ -1052,6 +1183,25 @@ def main():
 
     args = parser.parse_args()
 
+    if args.op == 'apple-slices':
+        print(json.dumps(APPLE_SLICES))
+        return
+    if args.op == 'android-archs':
+        print(json.dumps(ANDROID_ARCHS))
+        return
+    if args.op == 'assemble-android':
+        ctx = Context(args)
+        assemble_android(ctx, args.target, TARGETS[args.target], os.path.abspath(args.parts_dir))
+        return
+
+    if args.op == 'assemble-apple':
+        if HOST != 'Darwin':
+            parser.error('assemble-apple needs macOS')
+        ctx = Context(args)
+        assemble_apple_from_slices(ctx, args.target, TARGETS[args.target],
+                                   os.path.abspath(args.slices_dir))
+        return
+
     if args.op == 'fake':
         unknown = [n for n in args.targets if n not in TARGETS]
         if unknown:
@@ -1062,6 +1212,16 @@ def main():
 
     if args.op in ('build', 'sync'):
         targets = list(dict.fromkeys(args.targets))
+        bad = [x for x in (getattr(args, 'apple_slices', None) or []) if x not in APPLE_SLICES]
+        if bad:
+            parser.error(f'unknown apple slices: {", ".join(bad)} (choose from {", ".join(APPLE_SLICES)})')
+        if getattr(args, 'apple_slices', None) and any(TARGETS[n].kind != 'apple' for n in targets):
+            parser.error('--apple-slices only applies to apple targets')
+        bad = [x for x in (getattr(args, 'android_archs', None) or []) if x not in ANDROID_ARCHS]
+        if bad:
+            parser.error(f'unknown android archs: {", ".join(bad)} (choose from {", ".join(ANDROID_ARCHS)})')
+        if getattr(args, 'android_archs', None) and any(TARGETS[n].kind != 'android' for n in targets):
+            parser.error('--android-archs only applies to android targets')
         sync_targets = [*targets, *args.sync_for]
     else:
         if HOST not in TEST_GN_ARGS:

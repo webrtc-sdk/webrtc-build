@@ -90,53 +90,113 @@ jobs:
         name: packages-dry-run
         path: _package/*
 
-  # GitHub-hosted macOS jobs cannot share a checkout, so each apple variant
-  # syncs in its own parallel job: 11 slices per variant on a 3-core runner
-  # already take hours, and two in one job risk the 6h job limit.
-  build-apple:
+  # Each platform syncs once, then fans out one compile job per unit
+  # (apple: target x slice, android: target x arch) and assembles the
+  # package from the units. GitHub-hosted macOS jobs share no disk, so
+  # sync-apple hands its shallow checkout to the slice jobs as an artifact;
+  # Linux jobs share the Namespace cache volume.
+  #
+  # The libwebrtc Linux/Windows builds run only when the repository
+  # variable BUILD_LIBWEBRTC is 'true'.
+
+  sync-apple:
     if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
-    name: build (${{ matrix.id }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - id: apple
-            targets: apple
-          - id: apple-prefixed
-            targets: apple_prefixed
-          - id: apple-prefixed-stripped
-            targets: apple_prefixed_stripped
+    name: sync (apple)
     runs-on: macos-26
+    outputs:
+      commit: ${{ steps.cache.outputs.commit }}
+      slices: ${{ steps.slices.outputs.slices }}
     steps:
     - uses: actions/checkout@v5
-    - name: Select Xcode 26.0
-      run: sudo xcode-select --switch /Applications/Xcode_26.0.app/Contents/Developer
     - name: Source cache
       id: cache
       uses: ./.github/actions/source-cache
       with:
         backend: none
         commit: ${{ inputs.commitHash }}
+    - name: Sync
+      run: |
+        python3 scripts/build.py sync apple ${{ steps.cache.outputs.history-arg }} \
+          --commit '${{ steps.cache.outputs.commit }}'
+    - name: Slices
+      id: slices
+      run: echo "slices=$(python3 scripts/build.py apple-slices)" >> "$GITHUB_OUTPUT"
+    - name: Pack checkout
+      run: |
+        tar -cf - _source | zstd -T0 -3 -q -o "$RUNNER_TEMP/source-apple.tar.zst"
+        ls -lh "$RUNNER_TEMP/source-apple.tar.zst"
+    - uses: actions/upload-artifact@v4
+      with:
+        name: source-apple
+        path: ${{ runner.temp }}/source-apple.tar.zst
+        compression-level: 0
+        retention-days: 1
+
+  build-apple:
+    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
+    name: build (${{ matrix.target }} ${{ matrix.slice }})
+    needs: sync-apple
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [apple, apple_prefixed, apple_prefixed_stripped]
+        slice: ${{ fromJSON(needs.sync-apple.outputs.slices) }}
+    runs-on: macos-26
+    steps:
+    - uses: actions/checkout@v5
+    - name: Select Xcode 26.0
+      run: sudo xcode-select --switch /Applications/Xcode_26.0.app/Contents/Developer
+    - uses: actions/download-artifact@v4
+      with:
+        name: source-apple
+        path: ${{ runner.temp }}
+    - name: Unpack checkout
+      run: |
+        zstd -d -q -c "$RUNNER_TEMP/source-apple.tar.zst" | tar -xf -
+        rm "$RUNNER_TEMP/source-apple.tar.zst"
     - name: Build
       run: |
-        python3 scripts/build.py build ${{ matrix.targets }} --sync-for apple ${{ steps.cache.outputs.history-arg }} \
-          --commit '${{ steps.cache.outputs.commit }}' ${{ steps.cache.outputs.fresh-arg }} $CONFIG_ARGS
-    - name: Upload packages
-      uses: actions/upload-artifact@v4
+        python3 scripts/build.py build ${{ matrix.target }} --apple-slices ${{ matrix.slice }} --no-sync $CONFIG_ARGS
+    - uses: actions/upload-artifact@v4
       with:
-        name: packages-${{ matrix.id }}
+        name: apple-slice-${{ matrix.target }}-${{ matrix.slice }}
+        path: _package/apple-slices/*
+
+  assemble-apple:
+    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
+    name: assemble (${{ matrix.target }})
+    needs: build-apple
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [apple, apple_prefixed, apple_prefixed_stripped]
+    runs-on: macos-26
+    steps:
+    - uses: actions/checkout@v5
+    - name: Select Xcode 26.0
+      run: sudo xcode-select --switch /Applications/Xcode_26.0.app/Contents/Developer
+    - uses: actions/download-artifact@v4
+      with:
+        pattern: apple-slice-${{ matrix.target }}-*
+        path: slices
+        merge-multiple: true
+    - name: Assemble
+      run: python3 scripts/build.py assemble-apple ${{ matrix.target }} --slices-dir slices $CONFIG_ARGS
+    - uses: actions/upload-artifact@v4
+      with:
+        name: packages-${{ matrix.target }}
         path: _package/*
         compression-level: 0
 
-  # Linux: sync the shared checkout once on the Namespace cache volume, then
-  # build every target in parallel. Each build job mounts the synced volume,
-  # so its own sync is skipped (same commit) and it only compiles its target.
+  # Linux: sync the shared checkout once on the Namespace cache volume; each
+  # compile job mounts it, so its own sync is skipped or a quick catch-up.
   sync-linux:
     if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
     name: sync (linux)
     runs-on: namespace-profile-webrtc-android
     outputs:
       commit: ${{ steps.cache.outputs.commit }}
+      archs: ${{ steps.archs.outputs.archs }}
     steps:
     - uses: actions/checkout@v5
     - name: Source cache
@@ -151,33 +211,24 @@ jobs:
       run: |
         python3 scripts/build.py sync android libwebrtc_linux_x64 \
           --commit '${{ steps.cache.outputs.commit }}' ${{ steps.cache.outputs.fresh-arg }}
+    - name: Archs
+      id: archs
+      run: echo "archs=$(python3 scripts/build.py android-archs)" >> "$GITHUB_OUTPUT"
 
-  build-linux:
+  build-android:
     if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
-    name: build (${{ matrix.target }})
+    name: build (${{ matrix.target }} ${{ matrix.arch }})
     needs: sync-linux
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - android
-          - android_prefixed
-          - android_prefixed_stripped
-          - libwebrtc_linux_x64
-          - libwebrtc_linux_arm64
+        target: [android, android_prefixed, android_prefixed_stripped]
+        arch: ${{ fromJSON(needs.sync-linux.outputs.archs) }}
     runs-on: namespace-profile-webrtc-android
     steps:
     - uses: actions/checkout@v5
-    - uses: actions/checkout@v5
-      if: startsWith(matrix.target, 'libwebrtc_')
-      with:
-        repository: webrtc-sdk/libwebrtc
-        ref: ${{ inputs.libwebrtcRef || 'main' }}
-        path: libwebrtc
     - name: Install dependencies
-      run: |
-        sudo ./scripts/apt_install_x86_64.sh
-        if [[ '${{ matrix.target }}' == libwebrtc_* ]]; then sudo apt-get install -y openjdk-11-jdk; fi
+      run: sudo ./scripts/apt_install_x86_64.sh
     - name: Source cache
       uses: ./.github/actions/source-cache
       with:
@@ -185,23 +236,76 @@ jobs:
         id: linux
     - name: Build
       run: |
-        # Same --sync-for as sync-linux: the checkout is already at this
-        # commit, so this sync is skipped (or a quick catch-up if the volume
-        # did not carry over).
-        extra=''
-        if [[ '${{ matrix.target }}' == libwebrtc_* ]]; then extra='--libwebrtc-dir libwebrtc'; fi
-        python3 scripts/build.py build ${{ matrix.target }} $extra \
+        python3 scripts/build.py build ${{ matrix.target }} --android-archs ${{ matrix.arch }} \
           --sync-for android libwebrtc_linux_x64 \
           --commit '${{ needs.sync-linux.outputs.commit }}' $CONFIG_ARGS
-    - name: Upload packages
-      uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@v4
+      with:
+        name: android-part-${{ matrix.target }}-${{ matrix.arch }}
+        path: _package/android-parts/*
+
+  assemble-android:
+    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
+    name: assemble (${{ matrix.target }})
+    needs: build-android
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [android, android_prefixed, android_prefixed_stripped]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions/download-artifact@v4
+      with:
+        pattern: android-part-${{ matrix.target }}-*
+        path: parts
+        merge-multiple: true
+    - name: Assemble
+      run: python3 scripts/build.py assemble-android ${{ matrix.target }} --parts-dir parts
+    - uses: actions/upload-artifact@v4
       with:
         name: packages-${{ matrix.target }}
         path: _package/*
         compression-level: 0
 
+  build-libwebrtc-linux:
+    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') && vars.BUILD_LIBWEBRTC == 'true' }}
+    name: build (libwebrtc_linux_${{ matrix.arch }})
+    needs: sync-linux
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    runs-on: namespace-profile-webrtc-android
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions/checkout@v5
+      with:
+        repository: webrtc-sdk/libwebrtc
+        ref: ${{ inputs.libwebrtcRef || 'main' }}
+        path: libwebrtc
+    - name: Install dependencies
+      run: |
+        sudo ./scripts/apt_install_x86_64.sh
+        sudo apt-get install -y openjdk-11-jdk
+    - name: Source cache
+      uses: ./.github/actions/source-cache
+      with:
+        backend: namespace
+        id: linux
+    - name: Build
+      run: |
+        python3 scripts/build.py build libwebrtc_linux_${{ matrix.arch }} --libwebrtc-dir libwebrtc \
+          --sync-for android libwebrtc_linux_x64 \
+          --commit '${{ needs.sync-linux.outputs.commit }}' $CONFIG_ARGS
+    - uses: actions/upload-artifact@v4
+      with:
+        name: packages-libwebrtc-linux-${{ matrix.arch }}
+        path: _package/*
+        compression-level: 0
+
   build-libwebrtc-windows:
-    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
+    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') && vars.BUILD_LIBWEBRTC == 'true' }}
     name: build (libwebrtc_win_${{ matrix.arch }})
     strategy:
       fail-fast: false
