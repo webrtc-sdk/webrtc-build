@@ -31,6 +31,15 @@ on:
         description: 'Upload placeholder packages instead of building (tests the release flow)'
         type: boolean
         default: false
+      platforms:
+        description: 'Packages to build'
+        type: choice
+        default: all
+        options:
+          - all
+          - apple
+          - android
+          - libwebrtc
   workflow_call:
     inputs:
       commitHash:
@@ -48,6 +57,9 @@ on:
       dry_run:
         type: boolean
         default: false
+      platforms:
+        type: string
+        default: all
   pull_request:
     branches: [main]
     paths:
@@ -97,7 +109,7 @@ jobs:
   # Linux jobs share the Namespace cache volume.
 
   sync-apple:
-    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
+    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') && contains(fromJSON('["all", "apple"]'), inputs.platforms || 'all') }}
     name: gclient sync (apple)
     runs-on: macos-26
     outputs:
@@ -188,7 +200,7 @@ jobs:
   # Linux: sync the shared checkout once on the Namespace cache volume; each
   # compile job mounts it, so its own sync is skipped or a quick catch-up.
   sync-linux:
-    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
+    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') && contains(fromJSON('["all", "android", "libwebrtc"]'), inputs.platforms || 'all') }}
     name: gclient sync (linux)
     runs-on: namespace-profile-webrtc-android
     outputs:
@@ -213,7 +225,7 @@ jobs:
       run: echo "archs=$(python3 scripts/build.py android-archs)" >> "$GITHUB_OUTPUT"
 
   build-android:
-    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
+    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') && contains(fromJSON('["all", "android"]'), inputs.platforms || 'all') }}
     name: build (${{ matrix.target }} ${{ matrix.arch }})
     needs: sync-linux
     strategy:
@@ -266,7 +278,7 @@ jobs:
         compression-level: 0
 
   build-libwebrtc-linux:
-    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
+    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') && contains(fromJSON('["all", "libwebrtc"]'), inputs.platforms || 'all') }}
     name: build (libwebrtc_linux_${{ matrix.arch }})
     needs: sync-linux
     strategy:
@@ -302,7 +314,7 @@ jobs:
         compression-level: 0
 
   build-libwebrtc-windows:
-    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
+    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') && contains(fromJSON('["all", "libwebrtc"]'), inputs.platforms || 'all') }}
     name: build (libwebrtc_win_${{ matrix.arch }})
     strategy:
       fail-fast: false
