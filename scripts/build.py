@@ -20,8 +20,13 @@ Layout (relative to --work-dir, default: the repository root):
     _source/depot_tools/        depot_tools checkout
     _source/webrtc/.gclient     gclient solution (target_os grows as needed)
     _source/webrtc/src/         webrtc-sdk/webrtc checkout
-    _source/webrtc/src/out/<target>-<config>/   build output
+    _source/webrtc/src/out/<target>-<config>/   build output (removed after use)
     _package/                   release files (+ .sha256 / .md5 next to each)
+
+Build outputs are deleted once their files are in _package, and the tree is
+reset (patches undone, generated files removed) when the script exits, so a
+cached _source only ever holds pristine sources. --keep-out keeps them for
+local incremental builds.
 
 Set GIT_CACHE_PATH to share a gclient git cache between runs.
 
@@ -807,6 +812,22 @@ def add_common_args(p: argparse.ArgumentParser):
     p.add_argument('--sync-for', nargs='+', default=[], choices=list(TARGETS), metavar='TARGET',
                    help='also sync for these targets (their target_os), so a checkout or git '
                         'cache shared with their jobs stays identical')
+    p.add_argument('--keep-out', action='store_true',
+                   help='keep build outputs (src/out) and the patched tree for local '
+                        'incremental builds; by default both are cleaned')
+
+
+def clean_outputs(ctx: Context):
+    rm_rf(os.path.join(ctx.src_dir, 'out'))
+
+
+def cleanup(ctx: Context):
+    """Leave only pristine sources behind: no build outputs, no patches."""
+    if not os.path.isdir(os.path.join(ctx.src_dir, '.git')):
+        return
+    clean_outputs(ctx)
+    if ctx.applied != ():
+        reset_tree(ctx)
 
 
 def main():
@@ -853,26 +874,32 @@ def main():
         rm_rf(ctx.gclient_dir)
         rm_rf(ctx.depot_tools_dir)
     setup_environment(ctx)
-    if args.no_sync:
-        if not os.path.isdir(ctx.src_dir):
-            parser.error(f'--no-sync: {ctx.src_dir} does not exist')
-    else:
-        sync(ctx, target_os)
+    if args.no_sync and not os.path.isdir(ctx.src_dir):
+        parser.error(f'--no-sync: {ctx.src_dir} does not exist')
+    if not args.keep_out:
+        # Leftovers from a job that was killed before its cleanup ran.
+        clean_outputs(ctx)
 
-    if args.op == 'sync':
-        return
-    if args.op == 'test':
-        run_tests(ctx)
-        return
+    try:
+        if not args.no_sync:
+            sync(ctx, target_os)
 
-    for name in targets:
-        t = TARGETS[name]
-        logging.info('=== build %s (%s) ===', name, ctx.config)
-        BUILDERS[t.kind](ctx, name, t)
-
-    logging.info('Packages in %s:', ctx.package_dir)
-    for name in sorted(os.listdir(ctx.package_dir)):
-        logging.info('  %s', name)
+        if args.op == 'test':
+            run_tests(ctx)
+        elif args.op == 'build':
+            for name in targets:
+                t = TARGETS[name]
+                logging.info('=== build %s (%s) ===', name, ctx.config)
+                BUILDERS[t.kind](ctx, name, t)
+                if not args.keep_out:
+                    # Its files are in _package now; free the disk for the next target.
+                    rm_rf(ctx.out_dir(name))
+            logging.info('Packages in %s:', ctx.package_dir)
+            for name in sorted(os.listdir(ctx.package_dir)):
+                logging.info('  %s', name)
+    finally:
+        if not args.keep_out:
+            cleanup(ctx)
 
 
 if __name__ == '__main__':

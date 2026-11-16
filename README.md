@@ -38,6 +38,9 @@ Options:
 - `--no-sync`: rebuild the existing checkout without fetching (local iteration).
 - `--work-dir <dir>`: where `_source/` and `_package/` go (the default is the repository root).
 - `--jobs <n>`: ninja parallelism.
+- `--keep-out`: keep build outputs and the patched tree for incremental local builds. By default every build output under `src/out` is deleted once copied to `_package`, and the tree is reset on exit, so cached checkouts only hold sources.
+- `--fresh`: delete the checkout and sync from scratch.
+- `--sync-for <targets>`: also sync the dependencies of these targets (keeps shared caches identical across jobs).
 
 Set `GIT_CACHE_PATH` to reuse a gclient git cache across runs.
 
