@@ -51,8 +51,8 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         PR: ${{ inputs.pr || github.event.pull_request.number }}
       run: |
-        gh pr view "$PR" -R "$GITHUB_REPOSITORY" --json headRefName,headRefOid,mergeCommit,baseRefOid,merged \
-          --jq '"head_ref=\(.headRefName)\nhead_sha=\(.headRefOid)\nmerge_sha=\(.mergeCommit.oid)\nbase_sha=\(.baseRefOid)\nmerged=\(.merged)"' >> "$GITHUB_OUTPUT"
+        gh pr view "$PR" -R "$GITHUB_REPOSITORY" --json headRefName,headRefOid,mergeCommit,state \
+          --jq '"head_ref=\(.headRefName)\nhead_sha=\(.headRefOid)\nmerge_sha=\(.mergeCommit.oid // "")\nmerged=\(.state == "MERGED")"' >> "$GITHUB_OUTPUT"
     - uses: actions/checkout@v5
       with:
         ref: ${{ steps.pr.outputs.merge_sha }}
