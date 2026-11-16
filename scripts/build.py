@@ -21,7 +21,7 @@ Layout (relative to --work-dir, default: the repository root):
     _source/webrtc/.gclient     gclient solution (target_os grows as needed)
     _source/webrtc/src/         webrtc-sdk/webrtc checkout
     _source/webrtc/src/out/<target>-<config>/   build output (removed after use)
-    _package/                   release files (+ .sha256 / .md5 next to each)
+    _package/                   release files (+ <name>.shasum next to each)
 
 Build outputs are deleted once their files are in _package, and the tree is
 reset (patches undone, generated files removed) when the script exits, so a
@@ -273,15 +273,14 @@ def add_path(path: str):
 
 
 def write_checksums(path: str):
-    """Write <path>.sha256 and <path>.md5 in `shasum` format."""
-    for algo in ('sha256', 'md5'):
-        h = hashlib.new(algo)
-        with open(path, 'rb') as f:
-            for chunk in iter(lambda: f.read(1 << 20), b''):
-                h.update(chunk)
-        with open(f'{path}.{algo}', 'w', newline='\n') as f:
-            f.write(f'{h.hexdigest()}  {os.path.basename(path)}\n')
-        logging.info('%s %s: %s', algo, os.path.basename(path), h.hexdigest())
+    """Write <path>.shasum, same as `shasum -a 256 <name> > <name>.shasum`."""
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            h.update(chunk)
+    with open(f'{path}.shasum', 'w', newline='\n') as f:
+        f.write(f'{h.hexdigest()}  {os.path.basename(path)}\n')
+    logging.info('sha256 %s: %s', os.path.basename(path), h.hexdigest())
 
 
 def zip_dir(src_dir: str, zip_path: str):

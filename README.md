@@ -15,7 +15,7 @@ Build scripts and CI for [webrtc-sdk/webrtc](https://github.com/webrtc-sdk/webrt
 | `libwebrtc_linux_{x64,arm64}` | Linux | `libwebrtc-linux-<arch>-<config>.zip` |
 | `libwebrtc_win_{x64,arm64}` | Windows | `libwebrtc-win-<arch>-<config>.zip` |
 
-Every output is written to `_package/` with `.sha256` and `.md5` files next to it.
+Every output is written to `_package/` with a `<name>.shasum` file next to it (`shasum -a 256` format).
 
 ## Building
 
@@ -54,7 +54,7 @@ Releases are driven by pull requests:
 
 1. Run the **release-pr** workflow with the new version (e.g. `150.7871.08`). It opens `release/<version>` with [VERSION](VERSION) pointing at the newest commit of the webrtc default branch (or a given commit), and the PR body lists the webrtc commits since the previous release. The PR's `build` checks produce every package.
 2. **release-pr-refresh** keeps the PR current: on each webrtc push (`repository_dispatch: webrtc-updated`) and hourly it bumps `WEBRTC_COMMIT` to the newest commit and rewrites the commit list. Add the `pin` label to freeze the commit.
-3. Merge the PR. **release** reuses the packages of the PR's last successful build (or rebuilds), creates the `m<version>` release with the commit list, every package and `SHA256SUMS.txt` / `MD5SUMS.txt`, publishes LiveKitWebRTC, and notifies downstream repositories (`repository_dispatch: webrtc-release`).
+3. Merge the PR. **release** reuses the packages of the PR's last successful build (or rebuilds), creates the `m<version>` release with the commit list, every package with its `.shasum` file, publishes LiveKitWebRTC, and notifies downstream repositories (`repository_dispatch: webrtc-release`).
 
 Configuration:
 

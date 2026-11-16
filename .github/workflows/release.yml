@@ -3,7 +3,7 @@ name: release
 # Publishes a release when a release/<version> PR is merged:
 #   1. reuse the packages of the PR's last successful build (rebuild if none),
 #   2. create the m<version> tag and GitHub release with the webrtc commit
-#      list, every package (one zip layer) and SHA256SUMS.txt / MD5SUMS.txt,
+#      list and every package (one zip layer) with its <name>.shasum,
 #   3. publish LiveKitWebRTC to livekit/webrtc-xcframework,
 #   4. notify downstream repositories (repository_dispatch `webrtc-release`).
 #
@@ -125,15 +125,12 @@ jobs:
         path: artifacts
         pattern: packages-*
         merge-multiple: true
-    - name: Verify and aggregate checksums
+    - name: Verify checksums
       working-directory: artifacts
       run: |
         set -euo pipefail
         ls -l
-        sha256sum -c --quiet *.sha256
-        md5sum -c --quiet *.md5
-        cat *.sha256 > SHA256SUMS.txt
-        cat *.md5 > MD5SUMS.txt
+        shasum -a 256 -c *.shasum
     - name: Create release
       id: release
       env:
