@@ -414,16 +414,36 @@ def sync(ctx: Context, target_os: List[str]) -> bool:
         ctx.applied = None
         return False
 
+    # Fast path: dependency revisions are pinned in DEPS, so when DEPS (and
+    # target_os) did not change since the last complete sync, the deps are
+    # already right and only src needs the new commit. Hooks still run:
+    # lastchange and landmines depend on the src revision; the download hooks
+    # are no-ops when their files are current.
+    old = stamp.get('commit')
+    deps_unchanged = (
+        have_src and old and stamp.get('target_os') == merged
+        and run(['git', 'cat-file', '-e', f'{old}^{{commit}}'],
+                cwd=src, check=False).returncode == 0
+        and run(['git', 'diff', '--quiet', old, sha, '--', 'DEPS'],
+                cwd=src, check=False).returncode == 0)
+
     # Invalidate first so an interrupted sync is never taken as complete.
     rm_rf(stamp_path(ctx))
     write_gclient(ctx, merged)
     run(['git', 'checkout', '-f', sha], cwd=src)
     run(['git', 'clean', '-df'], cwd=src)
-    run(['gclient', 'sync', '-D', '--force', '--reset',
-         '--with_branch_heads', '--jobs=8'], cwd=ctx.gclient_dir)
+    if deps_unchanged:
+        logging.info('DEPS unchanged since %s; fast sync (src checkout + runhooks)', old)
+        run(['gclient', 'runhooks'], cwd=ctx.gclient_dir)
+        # gclient did not reset the dependency repos; reset_tree() undoes any
+        # patches a killed job may have left in third_party.
+        ctx.applied = None
+    else:
+        run(['gclient', 'sync', '-D', '--force', '--reset',
+             '--with_branch_heads', '--jobs=8'], cwd=ctx.gclient_dir)
+        ctx.applied = ()
     with open(stamp_path(ctx), 'w') as f:
         json.dump({'commit': sha, 'target_os': merged}, f)
-    ctx.applied = ()
     logging.info('webrtc synced at %s', sha)
     return True
 

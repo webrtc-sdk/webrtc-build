@@ -70,6 +70,7 @@ jobs:
         python3 scripts/build.py sync ${{ matrix.targets }} ${{ steps.cache.outputs.fresh-arg }} \
           --work-dir '${{ matrix.work_dir }}' --commit '${{ steps.cache.outputs.commit }}' 2>&1 | tee sync.log
         if grep -q 'skipping sync' sync.log; then result='skipped, checkout already at this commit'
+        elif grep -q 'fast sync' sync.log; then result='fast sync, DEPS unchanged (src checkout + runhooks)'
         elif [ -n '${{ steps.cache.outputs.fresh-arg }}' ]; then result='fresh sync'
         else result='synced'; fi
         echo "- sync: $(( $(date +%s) - start ))s, $result" >> "$GITHUB_STEP_SUMMARY"
