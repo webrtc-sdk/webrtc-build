@@ -391,6 +391,28 @@ def is_full_sha(ref: str) -> bool:
     return len(ref) == 40 and all(c in '0123456789abcdef' for c in ref.lower())
 
 
+def run_hooks(ctx: Context):
+    """gclient runhooks without downloading the unit test resources.
+
+    The resources hook (several GB of raw audio/video, ~4 minutes) only
+    matters for unit tests, which fetch them via fetch_test_resources(). It is
+    an unnamed DEPS hook, so custom_hooks cannot disable it; hiding
+    src/resources makes it find no .sha1 files and return immediately.
+    """
+    resources = os.path.join(ctx.src_dir, 'resources')
+    hidden = os.path.join(ctx.src_dir, '.resources.hidden')
+    rm_rf(hidden)
+    moved = os.path.isdir(resources)
+    if moved:
+        os.rename(resources, hidden)
+    try:
+        run(['gclient', 'runhooks'], cwd=ctx.gclient_dir)
+    finally:
+        if moved:
+            rm_rf(resources)
+            os.rename(hidden, resources)
+
+
 def sync(ctx: Context, target_os: List[str]) -> bool:
     """Check out ctx.commit with its dependencies.
 
@@ -458,13 +480,14 @@ def sync(ctx: Context, target_os: List[str]) -> bool:
     run(['git', 'clean', '-df'], cwd=src)
     if deps_unchanged:
         logging.info('DEPS unchanged since %s; fast sync (src checkout + runhooks)', old)
-        run(['gclient', 'runhooks'], cwd=ctx.gclient_dir)
+        run_hooks(ctx)
         # gclient did not reset the dependency repos; reset_tree() undoes any
         # patches a killed job may have left in third_party.
         ctx.applied = None
     else:
-        run(['gclient', 'sync', '-D', '--force', '--reset',
+        run(['gclient', 'sync', '-D', '--force', '--reset', '--nohooks',
              '--with_branch_heads', '--jobs=8'], cwd=ctx.gclient_dir)
+        run_hooks(ctx)
         ctx.applied = ()
     with open(stamp_path(ctx), 'w') as f:
         json.dump({'commit': sha, 'target_os': merged}, f)
@@ -833,7 +856,8 @@ def fetch_test_resources(ctx: Context):
     out of source caches (see clean_outputs) and, since a cached checkout may
     skip gclient sync, fetched here by running the same hook gclient would.
     """
-    # gclient runs hooks from the directory holding .gclient.
+    # gclient runs hooks from the directory holding .gclient. run_hooks()
+    # skips this one during sync, so it always runs here.
     run(test_resources_hook(ctx), cwd=ctx.gclient_dir)
     resources = os.path.join(ctx.src_dir, 'resources')
     missing, count, size = [], 0, 0
