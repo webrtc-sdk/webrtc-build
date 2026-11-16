@@ -20,7 +20,8 @@ Layout (relative to --work-dir, default: the repository root):
     _source/depot_tools/        depot_tools checkout
     _source/webrtc/.gclient     gclient solution (target_os grows as needed)
     _source/webrtc/src/         webrtc-sdk/webrtc checkout
-    _source/webrtc/src/out/<target>-<config>/   build output (removed after use)
+    _source/webrtc/src/out -> _out/build        link to the build outputs
+    _out/build/<target>-<config>/               build output (removed after use)
     _package/                   release files (+ <name>.shasum next to each)
 
 Build outputs are deleted once their files are in _package, and the tree is
@@ -245,11 +246,34 @@ def _on_rm_error(func, path, _exc_info):
     func(path)
 
 
+def is_link(path: str) -> bool:
+    """Symlink, or directory junction on Windows."""
+    isjunction = getattr(os.path, 'isjunction', None)  # Python 3.12+
+    return os.path.islink(path) or bool(isjunction and isjunction(path))
+
+
 def rm_rf(path: str):
-    if os.path.islink(path) or os.path.isfile(path):
+    if is_link(path):
+        # Remove the link only, never what it points to.
+        if os.path.isdir(path) and HOST == 'Windows':
+            os.rmdir(path)
+        else:
+            os.unlink(path)
+    elif os.path.isfile(path):
         os.remove(path)
     elif os.path.isdir(path):
         shutil.rmtree(path, onerror=_on_rm_error)
+
+
+def link_dir(link: str, target: str):
+    """Point `link` at directory `target` (a junction on Windows, which
+    needs no symlink privilege)."""
+    rm_rf(link)
+    if HOST == 'Windows':
+        subprocess.run(['cmd', '/c', 'mklink', '/J', link, target],
+                       check=True, stdout=subprocess.DEVNULL)
+    else:
+        os.symlink(target, link, target_is_directory=True)
 
 
 def mkdir_p(path: str):
@@ -309,6 +333,9 @@ class Context:
         self.gclient_dir = os.path.join(self.source_dir, 'webrtc')
         self.src_dir = os.path.join(self.gclient_dir, 'src')
         self.depot_tools_dir = os.path.join(self.source_dir, 'depot_tools')
+        # Build outputs live outside _source (which may be a cache volume);
+        # src/out links here.
+        self.out_root = os.path.join(self.work_dir, '_out', 'build')
         self.package_dir = os.path.abspath(
             args.package_dir or os.path.join(self.work_dir, '_package'))
         # Unit tests always build debug.
@@ -324,9 +351,10 @@ class Context:
         self.applied: Optional[tuple] = None
 
     def out_dir(self, name: str) -> str:
-        # build_aar.py requires the build dir to be under src; src/out is
-        # ignored by the webrtc checkout.
-        return os.path.join(self.src_dir, 'out', f'{name}-{self.config}')
+        # Under src/out (gitignored), which links to out_root. build_aar.py
+        # requires the build dir to be under the realpath of src, so start
+        # from it (_source can itself be a symlink to a cache volume).
+        return os.path.join(os.path.realpath(self.src_dir), 'out', f'{name}-{self.config}')
 
 
 def setup_environment(ctx: Context):
@@ -894,7 +922,10 @@ def run_tests(ctx: Context):
     gn_gen(ctx, out, gn_args)
     ninja(ctx, out, ['rtc_unittests'])
     # file_utils_override.cc takes the project root as two levels above the
-    # binary, i.e. src/ for src/out/<dir>, where resources/ lives.
+    # real binary path: <work>/_out for <work>/_out/build/<dir>. Point its
+    # resources/ at src/resources.
+    project_root = os.path.dirname(os.path.dirname(os.path.realpath(out)))
+    link_dir(os.path.join(project_root, 'resources'), os.path.join(ctx.src_dir, 'resources'))
     exe = 'rtc_unittests.exe' if HOST == 'Windows' else 'rtc_unittests'
     run([os.path.join(out, exe)], cwd=ctx.src_dir)
 
@@ -953,6 +984,9 @@ def clean_outputs(ctx: Context):
     resources (large raw audio/video, gitignored next to their tracked .sha1
     files) are fetched by `test` when needed.
     """
+    rm_rf(ctx.out_root)
+    rm_rf(os.path.join(os.path.dirname(ctx.out_root), 'resources'))  # test link
+    # The src/out link (older checkouts: a real src/out directory).
     rm_rf(os.path.join(ctx.src_dir, 'out'))
     if os.path.isdir(os.path.join(ctx.src_dir, 'resources')):
         run(['git', 'clean', '-ffdqX', '--', 'resources'], cwd=ctx.src_dir)
@@ -1039,6 +1073,8 @@ def main():
     try:
         if not args.no_sync:
             sync(ctx, target_os)
+        mkdir_p(ctx.out_root)
+        link_dir(os.path.join(ctx.src_dir, 'out'), ctx.out_root)
 
         if args.op == 'test':
             run_tests(ctx)
