@@ -125,14 +125,17 @@ jobs:
         path: _package/*
         compression-level: 0
 
-  build-android:
+  # Linux: sync the shared checkout once on the Namespace cache volume, then
+  # build every target in parallel. Each build job mounts the synced volume,
+  # so its own sync is skipped (same commit) and it only compiles its target.
+  sync-linux:
     if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
-    name: build (android)
+    name: sync (linux)
     runs-on: namespace-profile-webrtc-android
+    outputs:
+      commit: ${{ steps.cache.outputs.commit }}
     steps:
-    - uses: actions/checkout@v4
-    - name: Install dependencies
-      run: sudo ./scripts/apt_install_x86_64.sh
+    - uses: actions/checkout@v5
     - name: Source cache
       id: cache
       uses: ./.github/actions/source-cache
@@ -141,30 +144,29 @@ jobs:
         id: linux
         commit: ${{ inputs.commitHash }}
         force: ${{ inputs.force_cache_update || 'false' }}
-    - name: Build
+    - name: Sync
       run: |
-        python3 scripts/build.py build android android_prefixed android_prefixed_stripped \
-          --sync-for libwebrtc_linux_x64 \
-          --commit '${{ steps.cache.outputs.commit }}' ${{ steps.cache.outputs.fresh-arg }} $CONFIG_ARGS
-    - name: Upload packages
-      uses: actions/upload-artifact@v4
-      with:
-        name: packages-android
-        path: _package/*
-        compression-level: 0
+        python3 scripts/build.py sync android libwebrtc_linux_x64 \
+          --commit '${{ steps.cache.outputs.commit }}' ${{ steps.cache.outputs.fresh-arg }}
 
-  build-libwebrtc-linux:
+  build-linux:
     if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
-    name: build (libwebrtc_linux_${{ matrix.arch }})
+    name: build (${{ matrix.target }})
+    needs: sync-linux
     strategy:
       fail-fast: false
       matrix:
-        arch: [x64, arm64]
-    # Same runner profile as android: shares its source cache volume.
+        target:
+          - android
+          - android_prefixed
+          - android_prefixed_stripped
+          - libwebrtc_linux_x64
+          - libwebrtc_linux_arm64
     runs-on: namespace-profile-webrtc-android
     steps:
     - uses: actions/checkout@v5
     - uses: actions/checkout@v5
+      if: startsWith(matrix.target, 'libwebrtc_')
       with:
         repository: webrtc-sdk/libwebrtc
         ref: ${{ inputs.libwebrtcRef || 'main' }}
@@ -172,24 +174,26 @@ jobs:
     - name: Install dependencies
       run: |
         sudo ./scripts/apt_install_x86_64.sh
-        sudo apt-get install -y openjdk-11-jdk
+        if [[ '${{ matrix.target }}' == libwebrtc_* ]]; then sudo apt-get install -y openjdk-11-jdk; fi
     - name: Source cache
-      id: cache
       uses: ./.github/actions/source-cache
       with:
         backend: namespace
         id: linux
-        commit: ${{ inputs.commitHash }}
-        force: ${{ inputs.force_cache_update || 'false' }}
     - name: Build
       run: |
-        python3 scripts/build.py build libwebrtc_linux_${{ matrix.arch }} --libwebrtc-dir libwebrtc \
+        # Same --sync-for as sync-linux: the checkout is already at this
+        # commit, so this sync is skipped (or a quick catch-up if the volume
+        # did not carry over).
+        extra=''
+        if [[ '${{ matrix.target }}' == libwebrtc_* ]]; then extra='--libwebrtc-dir libwebrtc'; fi
+        python3 scripts/build.py build ${{ matrix.target }} $extra \
           --sync-for android libwebrtc_linux_x64 \
-          --commit '${{ steps.cache.outputs.commit }}' ${{ steps.cache.outputs.fresh-arg }} $CONFIG_ARGS
+          --commit '${{ needs.sync-linux.outputs.commit }}' $CONFIG_ARGS
     - name: Upload packages
       uses: actions/upload-artifact@v4
       with:
-        name: packages-libwebrtc-linux-${{ matrix.arch }}
+        name: packages-${{ matrix.target }}
         path: _package/*
         compression-level: 0
 
