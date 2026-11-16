@@ -828,7 +828,7 @@ def build_libwebrtc(ctx: Context, name: str, t: Target):
     shutil.copytree(os.path.join(ctx.libwebrtc_dir, 'include'), os.path.join(stage, 'include'),
                     ignore=shutil.ignore_patterns('.*'))
 
-    zip_name = f'libwebrtc-{t.os}-{t.cpu}-{ctx.config}.zip'
+    zip_name = package_name(name, ctx.config)
     zip_path = os.path.join(out, 'package', zip_name)
     zip_dir(stage, zip_path)
     publish(ctx, zip_path, zip_name)
@@ -911,6 +911,23 @@ BUILDERS = {
 }
 
 
+def package_name(name: str, config: str) -> str:
+    t = TARGETS[name]
+    if t.kind == 'libwebrtc':
+        return f'libwebrtc-{t.os}-{t.cpu}-{config}.zip'
+    return t.package
+
+
+def write_fake_packages(targets: List[str], package_dir: str, config: str):
+    """Placeholder files named like the real packages, for release dry runs."""
+    mkdir_p(package_dir)
+    for name in targets:
+        path = os.path.join(package_dir, package_name(name, config))
+        with open(path, 'w') as f:
+            f.write(f'placeholder for {name} ({config}); not a real build\n')
+        write_checksums(path)
+
+
 def add_common_args(p: argparse.ArgumentParser):
     p.add_argument('--commit',
                    help='webrtc-sdk/webrtc commit, tag or "HEAD" (default: WEBRTC_COMMIT in VERSION)')
@@ -976,7 +993,22 @@ def main():
                     help=', '.join(TARGETS))
     add_common_args(sp)
 
+    fp = sub.add_parser('fake', help='write placeholder packages (same names, with checksums) '
+                                     'for testing the release workflows without building')
+    fp.add_argument('targets', nargs='*', metavar='TARGET',
+                    help='default: all targets (' + ', '.join(TARGETS) + ')')
+    fp.add_argument('--debug', action='store_true')
+    fp.add_argument('--package-dir', default=os.path.join(ROOT_DIR, '_package'))
+
     args = parser.parse_args()
+
+    if args.op == 'fake':
+        unknown = [n for n in args.targets if n not in TARGETS]
+        if unknown:
+            parser.error(f'unknown targets: {", ".join(unknown)}')
+        write_fake_packages(args.targets or list(TARGETS), args.package_dir,
+                            'debug' if args.debug else 'release')
+        return
 
     if args.op in ('build', 'sync'):
         targets = list(dict.fromkeys(args.targets))

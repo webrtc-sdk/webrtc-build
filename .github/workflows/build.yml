@@ -27,6 +27,10 @@ on:
         description: 'Rebuild the Linux source cache from scratch'
         type: boolean
         default: false
+      dry_run:
+        description: 'Upload placeholder packages instead of building (tests the release flow)'
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       commitHash:
@@ -39,6 +43,9 @@ on:
         type: string
         default: 'main'
       force_cache_update:
+        type: boolean
+        default: false
+      dry_run:
         type: boolean
         default: false
   pull_request:
@@ -67,10 +74,26 @@ env:
 # force_cache_update is checked. Jobs sharing it sync the same target_os
 # (--sync-for). GitHub-hosted macOS/Windows jobs sync from scratch.
 
+# Dry run (input dry_run, or repository variable BUILD_DRY_RUN=true, e.g. in a
+# test repository): skip every build job and upload placeholder packages with
+# the real names and checksums instead.
+
 jobs:
+  dry-run:
+    if: inputs.dry_run || vars.BUILD_DRY_RUN == 'true'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+    - run: python3 scripts/build.py fake $CONFIG_ARGS
+    - uses: actions/upload-artifact@v4
+      with:
+        name: packages-dry-run
+        path: _package/*
+
   # One webrtc checkout per job; targets in a job share it. Apple is split in
   # two jobs to stay well under the 6h limit of GitHub-hosted runners.
   build-apple:
+    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
     name: build (${{ matrix.id }})
     strategy:
       fail-fast: false
@@ -103,6 +126,7 @@ jobs:
         compression-level: 0
 
   build-android:
+    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
     name: build (android)
     runs-on: namespace-profile-webrtc-android
     steps:
@@ -130,6 +154,7 @@ jobs:
         compression-level: 0
 
   build-libwebrtc-linux:
+    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
     name: build (libwebrtc_linux_${{ matrix.arch }})
     strategy:
       fail-fast: false
@@ -169,6 +194,7 @@ jobs:
         compression-level: 0
 
   build-libwebrtc-windows:
+    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
     name: build (libwebrtc_win_${{ matrix.arch }})
     strategy:
       fail-fast: false
