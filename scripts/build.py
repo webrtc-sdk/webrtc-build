@@ -44,6 +44,8 @@ import shutil
 import stat
 import subprocess
 import sys
+import threading
+import time
 import zipfile
 from typing import Dict, List, NamedTuple, Optional
 
@@ -203,14 +205,33 @@ TEST_GN_ARGS = {
 # Helpers
 # ---------------------------------------------------------------------------
 
+# Long-running command currently executing, reported by the heartbeat.
+_current = {'cmd': None, 'start': 0.0}
+
+HEARTBEAT_SECONDS = 120
+
+
+def _heartbeat():
+    while True:
+        time.sleep(HEARTBEAT_SECONDS)
+        cmd, start = _current['cmd'], _current['start']
+        if cmd:
+            logging.info('[heartbeat] %dm%02ds in: %s', *divmod(int(time.time() - start), 60), cmd)
+
+
 def run(args: List[str], cwd: Optional[str] = None, check: bool = True,
         capture: bool = False) -> subprocess.CompletedProcess:
     exe = shutil.which(args[0]) or args[0]
-    logging.info('+ %s%s', ' '.join(args), f'  (cwd={cwd})' if cwd else '')
-    return subprocess.run(
-        [exe, *args[1:]], cwd=cwd, check=check,
-        stdout=subprocess.PIPE if capture else None,
-        encoding='utf-8' if capture else None)
+    cmd = ' '.join(args)
+    logging.info('+ %s%s', cmd, f'  (cwd={cwd})' if cwd else '')
+    _current.update(cmd=cmd, start=time.time())
+    try:
+        return subprocess.run(
+            [exe, *args[1:]], cwd=cwd, check=check,
+            stdout=subprocess.PIPE if capture else None,
+            encoding='utf-8' if capture else None)
+    finally:
+        _current['cmd'] = None
 
 
 def capture(args: List[str], cwd: Optional[str] = None) -> str:
@@ -855,6 +876,10 @@ def cleanup(ctx: Context):
 
 def main():
     logging.basicConfig(level=logging.INFO, format='%(message)s')
+    # Child Python tools (gclient, gn helpers) write to a pipe in CI and would
+    # otherwise block-buffer their progress output.
+    os.environ['PYTHONUNBUFFERED'] = '1'
+    threading.Thread(target=_heartbeat, daemon=True).start()
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     sub = parser.add_subparsers(dest='op', required=True)
 

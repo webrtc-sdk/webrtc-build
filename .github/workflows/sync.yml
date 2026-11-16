@@ -78,6 +78,8 @@ jobs:
         force: ${{ github.event.inputs.force_cache_update }}
         git-cache-path: ${{ matrix.git_cache }}
     - name: Sync
+      # Ends the step (keeping its log) instead of hanging until the job limit.
+      timeout-minutes: 60
       run: |
         start=$(date +%s)
         python3 scripts/build.py sync ${{ matrix.targets }} ${{ steps.cache.outputs.fresh-arg }} \
