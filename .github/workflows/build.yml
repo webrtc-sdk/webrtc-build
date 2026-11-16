@@ -95,9 +95,6 @@ jobs:
   # package from the units. GitHub-hosted macOS jobs share no disk, so
   # sync-apple hands its shallow checkout to the slice jobs as an artifact;
   # Linux jobs share the Namespace cache volume.
-  #
-  # The libwebrtc Linux/Windows builds run only when the repository
-  # variable BUILD_LIBWEBRTC is 'true'.
 
   sync-apple:
     if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
@@ -269,7 +266,7 @@ jobs:
         compression-level: 0
 
   build-libwebrtc-linux:
-    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') && vars.BUILD_LIBWEBRTC == 'true' }}
+    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
     name: build (libwebrtc_linux_${{ matrix.arch }})
     needs: sync-linux
     strategy:
@@ -305,7 +302,7 @@ jobs:
         compression-level: 0
 
   build-libwebrtc-windows:
-    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') && vars.BUILD_LIBWEBRTC == 'true' }}
+    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
     name: build (libwebrtc_win_${{ matrix.arch }})
     strategy:
       fail-fast: false
