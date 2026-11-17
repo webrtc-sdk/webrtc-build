@@ -1,9 +1,11 @@
 name: release
 
 # Publishes a release when a release/<version> PR is merged:
-#   1. reuse the packages of the PR's last successful build (rebuild if none),
-#   2. create the m<version> tag and GitHub release with the webrtc commit
-#      list and every package (one zip layer) with its <name>.shasum,
+#   1. reuse the packages of a complete release build of the PR head (or build
+#      them again from the merge commit),
+#   2. check the package set, then create the m<version> tag and GitHub
+#      release with the webrtc commit list, the build inputs and every package
+#      (one zip layer) with its <name>.shasum,
 #   3. publish LiveKitWebRTC to livekit/webrtc-xcframework,
 #   4. notify downstream repositories (repository_dispatch `webrtc-release`).
 #
@@ -21,6 +23,10 @@ on:
       pr:
         description: 'Merged release PR number to (re)publish'
         required: true
+      rebuild:
+        description: 'Build the packages again instead of reusing the PR build'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -79,19 +85,51 @@ jobs:
           echo "base_commit=$(python3 scripts/release.py get --key WEBRTC_COMMIT --file "$RUNNER_TEMP/BASE_VERSION")"
           echo "merge_sha=$MERGE_SHA"
         } >> "$GITHUB_OUTPUT"
-    - name: Find a successful build of the PR head
+    # Reuse only a build that produced the release packages: its build-info
+    # must show the release configuration, every platform, the VERSION
+    # commit, and no placeholders (unless this repository runs dry), and none
+    # of its artifacts may have expired. Otherwise build again.
+    - name: Find a reusable build of the PR head
       id: build
       env:
         GH_TOKEN: ${{ github.token }}
         HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        COMMIT: ${{ steps.info.outputs.commit }}
+        ALLOW_DRY_RUN: ${{ vars.BUILD_DRY_RUN == 'true' }}
+        REBUILD: ${{ inputs.rebuild || false }}
       run: |
-        RUN=$(gh run list -R "$GITHUB_REPOSITORY" --workflow build.yml --commit "$HEAD_SHA" --status success \
-                --json databaseId --jq '.[0].databaseId // empty')
+        set -euo pipefail
+        RUN=''
+        if [ "$REBUILD" = true ]; then
+          echo "rebuild requested"
+        else
+          for id in $(gh run list -R "$GITHUB_REPOSITORY" --workflow build.yml --commit "$HEAD_SHA" \
+                        --status success --limit 20 --json databaseId --jq '.[].databaseId'); do
+            arts=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/artifacts?per_page=100" \
+                     --jq '.artifacts[] | "\(.name) \(.expired)"')
+            if ! grep -qx 'build-info false' <<< "$arts"; then
+              echo "run $id: no build-info"; continue
+            fi
+            if grep -q '^packages-.* true$' <<< "$arts"; then
+              echo "run $id: packages expired"; continue
+            fi
+            rm -rf "$RUNNER_TEMP/build-info"
+            gh run download "$id" -R "$GITHUB_REPOSITORY" -n build-info -D "$RUNNER_TEMP/build-info"
+            info="$RUNNER_TEMP/build-info/build-info.json"
+            cat "$info"
+            if jq -e --arg commit "$COMMIT" --argjson dry "$ALLOW_DRY_RUN" \
+                 '.webrtc == $commit and .configuration == "release" and .platforms == "all"
+                  and (.dry_run == false or $dry)' "$info" >/dev/null; then
+              RUN=$id; break
+            fi
+            echo "run $id: not a release build of $COMMIT"
+          done
+        fi
         echo "run_id=$RUN" >> "$GITHUB_OUTPUT"
         if [ -n "$RUN" ]; then
           echo "- reusing packages from build run [$RUN]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$RUN)" >> "$GITHUB_STEP_SUMMARY"
         else
-          echo "- no successful build for $HEAD_SHA; building now" >> "$GITHUB_STEP_SUMMARY"
+          echo "- no reusable build for $HEAD_SHA; building now" >> "$GITHUB_STEP_SUMMARY"
         fi
 
   build:
@@ -100,6 +138,10 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       commitHash: ${{ needs.prepare.outputs.commit }}
+      # Scripts, patches and VERSION of the release itself, not of the
+      # current branch (matters when republishing an older PR). The YAML of
+      # build.yml still comes from this workflow's revision.
+      ref: ${{ needs.prepare.outputs.merge_sha }}
     secrets: inherit
 
   publish-release:
@@ -120,6 +162,7 @@ jobs:
       run: |
         gh run download "${{ needs.prepare.outputs.build_run }}" -R "$GITHUB_REPOSITORY" -p 'packages-*' -D "$RUNNER_TEMP/dl"
         mkdir -p artifacts && find "$RUNNER_TEMP/dl" -type f -exec mv {} artifacts/ \;
+        gh run download "${{ needs.prepare.outputs.build_run }}" -R "$GITHUB_REPOSITORY" -n build-info -D "$RUNNER_TEMP"
     - name: Download packages (this run)
       if: needs.prepare.outputs.build_run == ''
       uses: actions/download-artifact@v4
@@ -127,11 +170,24 @@ jobs:
         path: artifacts
         pattern: packages-*
         merge-multiple: true
-    - name: Verify checksums
+    - name: Download build info (this run)
+      if: needs.prepare.outputs.build_run == ''
+      uses: actions/download-artifact@v4
+      with:
+        name: build-info
+        path: ${{ runner.temp }}
+    - name: Verify packages
       working-directory: artifacts
       run: |
         set -euo pipefail
         ls -l
+        # Exactly the release package set (scripts/build.py packages), each
+        # with its checksum file.
+        python3 ../scripts/build.py packages | while read -r f; do echo "$f"; echo "$f.shasum"; done | sort > "$RUNNER_TEMP/expected"
+        ls -1 | sort > "$RUNNER_TEMP/actual"
+        if ! diff -u "$RUNNER_TEMP/expected" "$RUNNER_TEMP/actual"; then
+          echo "::error::package set differs from scripts/build.py packages (- missing, + unexpected)"; exit 1
+        fi
         shasum -a 256 -c *.shasum
     - name: Create release
       id: release
@@ -143,6 +199,9 @@ jobs:
         TAG="m$VERSION"
         python3 scripts/release.py notes --base "${{ needs.prepare.outputs.base_commit }}" \
           --head "${{ needs.prepare.outputs.commit }}" --version "$VERSION" --out "$RUNNER_TEMP/notes.md"
+        # Record the exact build inputs.
+        jq -r '"\nBuilt from \(env.GITHUB_REPOSITORY)@\(.repo) with the libwebrtc wrapper webrtc-sdk/libwebrtc@\(.libwebrtc) (\(.configuration))."' \
+          "$RUNNER_TEMP/build-info.json" >> "$RUNNER_TEMP/notes.md"
         if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
           gh release upload "$TAG" artifacts/* --clobber -R "$GITHUB_REPOSITORY"
           gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md" -R "$GITHUB_REPOSITORY"

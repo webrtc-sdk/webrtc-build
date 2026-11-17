@@ -60,6 +60,10 @@ on:
       platforms:
         type: string
         default: all
+      ref:
+        description: 'revision of this repository to build from (default: the calling revision)'
+        type: string
+        default: ''
   pull_request:
     branches: [main]
     paths:
@@ -86,16 +90,75 @@ env:
 # force_cache_update is checked. Jobs sharing it sync the same target_os
 # (--sync-for). GitHub-hosted macOS/Windows jobs sync from scratch.
 
+# Inputs are resolved once (resolve job) and every job builds exactly those
+# revisions: the webrtc commit, the webrtc-sdk/libwebrtc wrapper commit and the
+# revision of this repository (scripts, patches, VERSION; input `ref` lets
+# release.yml pin an older release). The YAML of this workflow itself always
+# comes from the caller's revision. The resolved values are uploaded as the
+# build-info artifact, which release.yml checks before reusing the packages.
+
 # Dry run (input dry_run, or repository variable BUILD_DRY_RUN=true, e.g. in a
 # test repository): skip every build job and upload placeholder packages with
 # the real names and checksums instead.
 
 jobs:
+  resolve:
+    name: resolve inputs
+    runs-on: ubuntu-latest
+    outputs:
+      repo: ${{ steps.resolve.outputs.repo }}
+      webrtc: ${{ steps.resolve.outputs.webrtc }}
+      libwebrtc: ${{ steps.resolve.outputs.libwebrtc }}
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: ${{ inputs.ref }}
+    - name: Resolve revisions
+      id: resolve
+      env:
+        GH_TOKEN: ${{ github.token }}
+        WEBRTC_REPO: ${{ vars.WEBRTC_REPO || 'webrtc-sdk/webrtc' }}
+        COMMIT: ${{ inputs.commitHash }}
+        LIBWEBRTC_REF: ${{ inputs.libwebrtcRef || 'main' }}
+        CONFIGURATION: ${{ inputs.configuration || 'release' }}
+        PLATFORMS: ${{ inputs.platforms || 'all' }}
+        DRY_RUN: ${{ (inputs.dry_run || vars.BUILD_DRY_RUN == 'true') && 'true' || 'false' }}
+      run: |
+        set -euo pipefail
+        REPO_SHA=$(git rev-parse HEAD)
+        WEBRTC=$(gh api "repos/$WEBRTC_REPO/commits/${COMMIT:-$(python3 scripts/release.py get --key WEBRTC_COMMIT)}" --jq .sha)
+        LIBWEBRTC=$(gh api "repos/webrtc-sdk/libwebrtc/commits/$LIBWEBRTC_REF" --jq .sha)
+        {
+          echo "repo=$REPO_SHA"
+          echo "webrtc=$WEBRTC"
+          echo "libwebrtc=$LIBWEBRTC"
+        } >> "$GITHUB_OUTPUT"
+        mkdir -p build-info
+        jq -n --arg repo "$REPO_SHA" --arg webrtc_repo "$WEBRTC_REPO" --arg webrtc "$WEBRTC" \
+          --arg libwebrtc "$LIBWEBRTC" --arg configuration "$CONFIGURATION" \
+          --arg platforms "$PLATFORMS" --argjson dry_run "$DRY_RUN" --arg event "$GITHUB_EVENT_NAME" \
+          '{repo: $repo, webrtc_repo: $webrtc_repo, webrtc: $webrtc, libwebrtc: $libwebrtc,
+            configuration: $configuration, platforms: $platforms, dry_run: $dry_run, event: $event}' \
+          | tee build-info/build-info.json
+        {
+          echo "- this repository: \`$REPO_SHA\`"
+          echo "- webrtc ($WEBRTC_REPO): \`$WEBRTC\`"
+          echo "- libwebrtc wrapper: \`$LIBWEBRTC\`"
+          echo "- configuration: $CONFIGURATION, platforms: $PLATFORMS, dry run: $DRY_RUN"
+        } >> "$GITHUB_STEP_SUMMARY"
+    - uses: actions/upload-artifact@v4
+      with:
+        name: build-info
+        path: build-info/build-info.json
+
   dry-run:
     if: inputs.dry_run || vars.BUILD_DRY_RUN == 'true'
+    needs: resolve
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
+      with:
+        ref: ${{ needs.resolve.outputs.repo }}
     - run: python3 scripts/build.py fake $CONFIG_ARGS
     - uses: actions/upload-artifact@v4
       with:
@@ -111,18 +174,20 @@ jobs:
   sync-apple:
     if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') && contains(fromJSON('["all", "apple"]'), inputs.platforms || 'all') }}
     name: gclient sync (apple)
+    needs: resolve
     runs-on: macos-26
     outputs:
-      commit: ${{ steps.cache.outputs.commit }}
       slices: ${{ steps.slices.outputs.slices }}
     steps:
     - uses: actions/checkout@v5
+      with:
+        ref: ${{ needs.resolve.outputs.repo }}
     - name: Source cache
       id: cache
       uses: ./.github/actions/source-cache
       with:
         backend: none
-        commit: ${{ inputs.commitHash }}
+        commit: ${{ needs.resolve.outputs.webrtc }}
     - name: Sync
       run: |
         python3 scripts/build.py sync apple ${{ steps.cache.outputs.history-arg }} \
@@ -144,7 +209,7 @@ jobs:
   build-apple:
     if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
     name: build (${{ matrix.target }} ${{ matrix.slice }})
-    needs: sync-apple
+    needs: [resolve, sync-apple]
     strategy:
       fail-fast: false
       matrix:
@@ -153,6 +218,8 @@ jobs:
     runs-on: macos-26
     steps:
     - uses: actions/checkout@v5
+      with:
+        ref: ${{ needs.resolve.outputs.repo }}
     - name: Select Xcode 26.0
       run: sudo xcode-select --switch /Applications/Xcode_26.0.app/Contents/Developer
     - uses: actions/download-artifact@v4
@@ -174,7 +241,7 @@ jobs:
   assemble-apple:
     if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
     name: assemble (${{ matrix.target }})
-    needs: build-apple
+    needs: [resolve, build-apple]
     strategy:
       fail-fast: false
       matrix:
@@ -182,6 +249,8 @@ jobs:
     runs-on: macos-26
     steps:
     - uses: actions/checkout@v5
+      with:
+        ref: ${{ needs.resolve.outputs.repo }}
     - name: Select Xcode 26.0
       run: sudo xcode-select --switch /Applications/Xcode_26.0.app/Contents/Developer
     - uses: actions/download-artifact@v4
@@ -202,19 +271,21 @@ jobs:
   sync-linux:
     if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') && contains(fromJSON('["all", "android", "libwebrtc"]'), inputs.platforms || 'all') }}
     name: gclient sync (linux)
+    needs: resolve
     runs-on: namespace-profile-webrtc-android
     outputs:
-      commit: ${{ steps.cache.outputs.commit }}
       archs: ${{ steps.archs.outputs.archs }}
     steps:
     - uses: actions/checkout@v5
+      with:
+        ref: ${{ needs.resolve.outputs.repo }}
     - name: Source cache
       id: cache
       uses: ./.github/actions/source-cache
       with:
         backend: namespace
         id: linux
-        commit: ${{ inputs.commitHash }}
+        commit: ${{ needs.resolve.outputs.webrtc }}
         force: ${{ inputs.force_cache_update || 'false' }}
     - name: Sync
       run: |
@@ -227,7 +298,7 @@ jobs:
   build-android:
     if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') && contains(fromJSON('["all", "android"]'), inputs.platforms || 'all') }}
     name: build (${{ matrix.target }} ${{ matrix.arch }})
-    needs: sync-linux
+    needs: [resolve, sync-linux]
     strategy:
       fail-fast: false
       matrix:
@@ -236,6 +307,8 @@ jobs:
     runs-on: namespace-profile-webrtc-android
     steps:
     - uses: actions/checkout@v5
+      with:
+        ref: ${{ needs.resolve.outputs.repo }}
     - name: Install dependencies
       run: sudo ./scripts/apt_install_x86_64.sh
     - name: Source cache
@@ -247,7 +320,7 @@ jobs:
       run: |
         python3 scripts/build.py build ${{ matrix.target }} --android-archs ${{ matrix.arch }} \
           --sync-for android libwebrtc_linux_x64 \
-          --commit '${{ needs.sync-linux.outputs.commit }}' $CONFIG_ARGS
+          --commit '${{ needs.resolve.outputs.webrtc }}' $CONFIG_ARGS
     - uses: actions/upload-artifact@v4
       with:
         name: android-part-${{ matrix.target }}-${{ matrix.arch }}
@@ -256,7 +329,7 @@ jobs:
   assemble-android:
     if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
     name: assemble (${{ matrix.target }})
-    needs: build-android
+    needs: [resolve, build-android]
     strategy:
       fail-fast: false
       matrix:
@@ -264,6 +337,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
+      with:
+        ref: ${{ needs.resolve.outputs.repo }}
     - uses: actions/download-artifact@v4
       with:
         pattern: android-part-${{ matrix.target }}-*
@@ -280,7 +355,7 @@ jobs:
   build-libwebrtc-linux:
     if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') && contains(fromJSON('["all", "libwebrtc"]'), inputs.platforms || 'all') }}
     name: build (libwebrtc_linux_${{ matrix.arch }})
-    needs: sync-linux
+    needs: [resolve, sync-linux]
     strategy:
       fail-fast: false
       matrix:
@@ -288,10 +363,12 @@ jobs:
     runs-on: namespace-profile-webrtc-android
     steps:
     - uses: actions/checkout@v5
+      with:
+        ref: ${{ needs.resolve.outputs.repo }}
     - uses: actions/checkout@v5
       with:
         repository: webrtc-sdk/libwebrtc
-        ref: ${{ inputs.libwebrtcRef || 'main' }}
+        ref: ${{ needs.resolve.outputs.libwebrtc }}
         path: libwebrtc
     - name: Install dependencies
       run: |
@@ -306,7 +383,7 @@ jobs:
       run: |
         python3 scripts/build.py build libwebrtc_linux_${{ matrix.arch }} --libwebrtc-dir libwebrtc \
           --sync-for android libwebrtc_linux_x64 \
-          --commit '${{ needs.sync-linux.outputs.commit }}' $CONFIG_ARGS
+          --commit '${{ needs.resolve.outputs.webrtc }}' $CONFIG_ARGS
     - uses: actions/upload-artifact@v4
       with:
         name: packages-libwebrtc-linux-${{ matrix.arch }}
@@ -316,6 +393,7 @@ jobs:
   build-libwebrtc-windows:
     if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') && contains(fromJSON('["all", "libwebrtc"]'), inputs.platforms || 'all') }}
     name: build (libwebrtc_win_${{ matrix.arch }})
+    needs: resolve
     strategy:
       fail-fast: false
       matrix:
@@ -323,17 +401,19 @@ jobs:
     runs-on: windows-2022
     steps:
     - uses: actions/checkout@v5
+      with:
+        ref: ${{ needs.resolve.outputs.repo }}
     - uses: actions/checkout@v5
       with:
         repository: webrtc-sdk/libwebrtc
-        ref: ${{ inputs.libwebrtcRef || 'main' }}
+        ref: ${{ needs.resolve.outputs.libwebrtc }}
         path: libwebrtc
     - name: Source cache
       id: cache
       uses: ./.github/actions/source-cache
       with:
         backend: none
-        commit: ${{ inputs.commitHash }}
+        commit: ${{ needs.resolve.outputs.webrtc }}
     - name: Build
       # The D:\ work drive is too small for a webrtc checkout; use C:\.
       shell: pwsh

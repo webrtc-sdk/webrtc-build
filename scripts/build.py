@@ -1112,9 +1112,9 @@ def add_common_args(p: argparse.ArgumentParser):
                    help='delete the existing checkout (and depot_tools) and sync from scratch')
     p.add_argument('--jobs', type=int, help='ninja parallelism (default: autoninja)')
     p.add_argument('--no-history', action='store_true',
-                   help='shallow dependency checkouts (much less to download; src keeps its '
-                        'history for LASTCHANGE); for throwaway machines, a cached checkout '
-                        'should keep history')
+                   help='shallow dependency checkouts (much less to download; src is always '
+                        'a full clone); for throwaway machines, a cached checkout should keep '
+                        'history')
     p.add_argument('--sync-for', nargs='+', default=[], choices=list(TARGETS), metavar='TARGET',
                    help='also sync for these targets (their target_os), so a checkout or git '
                         'cache shared with their jobs stays identical')
@@ -1187,6 +1187,10 @@ def main():
 
     sub.add_parser('apple-slices', help='print the apple slice names as JSON')
 
+    kp = sub.add_parser('packages', help='print the file name of every release package, one '
+                                         'per line (the set a release must contain)')
+    kp.add_argument('--debug', action='store_true')
+
     tp = sub.add_parser('test', help='build and run rtc_unittests (debug) for the host')
     add_common_args(tp)
 
@@ -1209,6 +1213,10 @@ def main():
         return
     if args.op == 'android-archs':
         print(json.dumps(ANDROID_ARCHS))
+        return
+    if args.op == 'packages':
+        config = 'debug' if args.debug else 'release'
+        print('\n'.join(package_name(n, config) for n in TARGETS))
         return
     if args.op == 'assemble-android':
         ctx = Context(args)
