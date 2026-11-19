@@ -12,8 +12,8 @@ Build scripts and CI for [webrtc-sdk/webrtc](https://github.com/webrtc-sdk/webrt
 | `android` | Linux | `libwebrtc.aar` |
 | `android_prefixed` | Linux | `libwebrtc_prefixed.aar` |
 | `android_prefixed_stripped` | Linux | `libwebrtc_prefixed_stripped.aar` |
-| `libwebrtc_linux_{x64,arm64}` | Linux | `libwebrtc-linux-<arch>-<config>.zip` |
-| `libwebrtc_win_{x64,arm64}` | Windows | `libwebrtc-win-<arch>-<config>.zip` |
+
+The libwebrtc C++ wrapper packages for Linux and Windows (`libwebrtc-<os>-<arch>-<config>.zip`) are built and released in [webrtc-sdk/libwebrtc-wrapper](https://github.com/webrtc-sdk/libwebrtc-wrapper).
 
 Every output is written to `_package/` with a `<name>.shasum` file next to it (`shasum -a 256` format).
 
@@ -24,10 +24,7 @@ Every output is written to `_package/` with a `<name>.shasum` file next to it (`
 python3 scripts/build.py build apple apple_prefixed apple_prefixed_stripped
 python3 scripts/build.py build android android_prefixed android_prefixed_stripped
 
-# libwebrtc wrapper builds need a webrtc-sdk/libwebrtc checkout.
-python3 scripts/build.py build libwebrtc_linux_x64 --libwebrtc-dir ../libwebrtc
-
-# Build and run rtc_unittests (debug) for the host platform.
+# Build and run rtc_unittests (debug) for the host platform (Linux, macOS or Windows).
 python3 scripts/build.py test
 ```
 

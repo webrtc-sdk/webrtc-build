@@ -1,8 +1,10 @@
 name: build
 
-# Builds every release package. Runs on release PRs (release-pr.yml), by hand,
-# and from release.yml when a merged release PR has no successful build to reuse.
-# Publishing lives in release.yml.
+# Builds every release package (apple xcframeworks and android aars). Runs on
+# release PRs (release-pr.yml), by hand, and from release.yml when a merged
+# release PR has no successful build to reuse. Publishing lives in release.yml.
+# The libwebrtc C++ wrapper packages for Linux and Windows are built in
+# webrtc-sdk/libwebrtc-wrapper.
 
 on:
   workflow_dispatch:
@@ -19,10 +21,6 @@ on:
         options:
           - release
           - debug
-      libwebrtcRef:
-        description: 'webrtc-sdk/libwebrtc ref for the libwebrtc builds'
-        default: 'main'
-        required: false
       force_cache_update:
         description: 'Rebuild the Linux source cache from scratch'
         type: boolean
@@ -39,7 +37,6 @@ on:
           - all
           - apple
           - android
-          - libwebrtc
   workflow_call:
     inputs:
       commitHash:
@@ -48,9 +45,6 @@ on:
       configuration:
         type: string
         default: 'release'
-      libwebrtcRef:
-        type: string
-        default: 'main'
       force_cache_update:
         type: boolean
         default: false
@@ -85,14 +79,12 @@ env:
   WEBRTC_REPO_URL: https://github.com/${{ vars.WEBRTC_REPO || 'webrtc-sdk/webrtc' }}.git
 
 # The Linux source cache (.github/actions/source-cache, Namespace volume) is
-# shared by the android and libwebrtc_linux jobs and the sync and unittests
-# workflows. It is updated only when the webrtc commit changes or
+# shared by the android jobs and the sync and unittests workflows. It is updated only when the webrtc commit changes or
 # force_cache_update is checked. Jobs sharing it sync the same target_os
 # (--sync-for). GitHub-hosted macOS/Windows jobs sync from scratch.
 
 # Inputs are resolved once (resolve job) and every job builds exactly those
-# revisions: the webrtc commit, the webrtc-sdk/libwebrtc wrapper commit and the
-# revision of this repository (scripts, patches, VERSION; input `ref` lets
+# revisions: the webrtc commit and the revision of this repository (scripts, patches, VERSION; input `ref` lets
 # release.yml pin an older release). The YAML of this workflow itself always
 # comes from the caller's revision. The resolved values are uploaded as the
 # build-info artifact, which release.yml checks before reusing the packages.
@@ -108,7 +100,6 @@ jobs:
     outputs:
       repo: ${{ steps.resolve.outputs.repo }}
       webrtc: ${{ steps.resolve.outputs.webrtc }}
-      libwebrtc: ${{ steps.resolve.outputs.libwebrtc }}
     steps:
     - uses: actions/checkout@v5
       with:
@@ -119,7 +110,6 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         WEBRTC_REPO: ${{ vars.WEBRTC_REPO || 'webrtc-sdk/webrtc' }}
         COMMIT: ${{ inputs.commitHash }}
-        LIBWEBRTC_REF: ${{ inputs.libwebrtcRef || 'main' }}
         CONFIGURATION: ${{ inputs.configuration || 'release' }}
         PLATFORMS: ${{ inputs.platforms || 'all' }}
         DRY_RUN: ${{ (inputs.dry_run || vars.BUILD_DRY_RUN == 'true') && 'true' || 'false' }}
@@ -127,23 +117,20 @@ jobs:
         set -euo pipefail
         REPO_SHA=$(git rev-parse HEAD)
         WEBRTC=$(gh api "repos/$WEBRTC_REPO/commits/${COMMIT:-$(python3 scripts/release.py get --key WEBRTC_COMMIT)}" --jq .sha)
-        LIBWEBRTC=$(gh api "repos/webrtc-sdk/libwebrtc/commits/$LIBWEBRTC_REF" --jq .sha)
         {
           echo "repo=$REPO_SHA"
           echo "webrtc=$WEBRTC"
-          echo "libwebrtc=$LIBWEBRTC"
         } >> "$GITHUB_OUTPUT"
         mkdir -p build-info
         jq -n --arg repo "$REPO_SHA" --arg webrtc_repo "$WEBRTC_REPO" --arg webrtc "$WEBRTC" \
-          --arg libwebrtc "$LIBWEBRTC" --arg configuration "$CONFIGURATION" \
+          --arg configuration "$CONFIGURATION" \
           --arg platforms "$PLATFORMS" --argjson dry_run "$DRY_RUN" --arg event "$GITHUB_EVENT_NAME" \
-          '{repo: $repo, webrtc_repo: $webrtc_repo, webrtc: $webrtc, libwebrtc: $libwebrtc,
+          '{repo: $repo, webrtc_repo: $webrtc_repo, webrtc: $webrtc,
             configuration: $configuration, platforms: $platforms, dry_run: $dry_run, event: $event}' \
           | tee build-info/build-info.json
         {
           echo "- this repository: \`$REPO_SHA\`"
           echo "- webrtc ($WEBRTC_REPO): \`$WEBRTC\`"
-          echo "- libwebrtc wrapper: \`$LIBWEBRTC\`"
           echo "- configuration: $CONFIGURATION, platforms: $PLATFORMS, dry run: $DRY_RUN"
         } >> "$GITHUB_STEP_SUMMARY"
     - uses: actions/upload-artifact@v4
@@ -271,7 +258,7 @@ jobs:
   # Linux: sync the shared checkout once on the Namespace cache volume; each
   # compile job mounts it, so its own sync is skipped or a quick catch-up.
   sync-linux:
-    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') && contains(fromJSON('["all", "android", "libwebrtc"]'), inputs.platforms || 'all') }}
+    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') && contains(fromJSON('["all", "android"]'), inputs.platforms || 'all') }}
     name: gclient sync (linux)
     needs: resolve
     runs-on: namespace-profile-webrtc-android
@@ -291,7 +278,7 @@ jobs:
         force: ${{ inputs.force_cache_update || 'false' }}
     - name: Sync
       run: |
-        python3 scripts/build.py sync android libwebrtc_linux_x64 \
+        python3 scripts/build.py sync android \
           --commit '${{ steps.cache.outputs.commit }}' ${{ steps.cache.outputs.fresh-arg }}
     - name: Archs
       id: archs
@@ -321,7 +308,7 @@ jobs:
     - name: Build
       run: |
         python3 scripts/build.py build ${{ matrix.target }} --android-archs ${{ matrix.arch }} \
-          --sync-for android libwebrtc_linux_x64 \
+          --sync-for android \
           --commit '${{ needs.resolve.outputs.webrtc }}' $CONFIG_ARGS
     - uses: actions/upload-artifact@v4
       with:
@@ -352,88 +339,4 @@ jobs:
       with:
         name: packages-${{ matrix.target }}
         path: _package/*
-        compression-level: 0
-
-  build-libwebrtc-linux:
-    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') && contains(fromJSON('["all", "libwebrtc"]'), inputs.platforms || 'all') }}
-    name: build (libwebrtc_linux_${{ matrix.arch }})
-    needs: [resolve, sync-linux]
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [x64, arm64]
-    runs-on: namespace-profile-webrtc-android
-    steps:
-    - uses: actions/checkout@v5
-      with:
-        ref: ${{ needs.resolve.outputs.repo }}
-    - uses: actions/checkout@v5
-      with:
-        repository: webrtc-sdk/libwebrtc
-        ref: ${{ needs.resolve.outputs.libwebrtc }}
-        path: libwebrtc
-    - name: Install dependencies
-      run: |
-        sudo ./scripts/apt_install_x86_64.sh
-        sudo apt-get install -y openjdk-11-jdk
-    - name: Source cache
-      uses: ./.github/actions/source-cache
-      with:
-        backend: namespace
-        id: linux
-    - name: Build
-      run: |
-        python3 scripts/build.py build libwebrtc_linux_${{ matrix.arch }} --libwebrtc-dir libwebrtc \
-          --sync-for android libwebrtc_linux_x64 \
-          --commit '${{ needs.resolve.outputs.webrtc }}' $CONFIG_ARGS
-    - uses: actions/upload-artifact@v4
-      with:
-        name: packages-libwebrtc-linux-${{ matrix.arch }}
-        path: _package/*
-        compression-level: 0
-
-  build-libwebrtc-windows:
-    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') && contains(fromJSON('["all", "libwebrtc"]'), inputs.platforms || 'all') }}
-    name: build (libwebrtc_win_${{ matrix.arch }})
-    needs: resolve
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [x64, arm64]
-    runs-on: windows-2022
-    steps:
-    - uses: actions/checkout@v5
-      with:
-        ref: ${{ needs.resolve.outputs.repo }}
-    - uses: actions/checkout@v5
-      with:
-        repository: webrtc-sdk/libwebrtc
-        ref: ${{ needs.resolve.outputs.libwebrtc }}
-        path: libwebrtc
-    - name: Source cache
-      id: cache
-      uses: ./.github/actions/source-cache
-      with:
-        backend: none
-        commit: ${{ needs.resolve.outputs.webrtc }}
-    - name: Build
-      # The D:\ work drive is too small for a webrtc checkout; use C:\.
-      shell: pwsh
-      env:
-        COMMIT: ${{ steps.cache.outputs.commit }}
-        FRESH: ${{ steps.cache.outputs.fresh-arg }}
-        HISTORY: ${{ steps.cache.outputs.history-arg }}
-        CONFIGURATION: ${{ inputs.configuration }}
-      run: |
-        $extra = @('--commit', $env:COMMIT)
-        if ($env:FRESH) { $extra += $env:FRESH }
-        if ($env:HISTORY) { $extra += $env:HISTORY }
-        if ($env:CONFIGURATION -eq 'debug') { $extra += '--debug' }
-        python3 scripts/build.py build libwebrtc_win_${{ matrix.arch }} `
-          --libwebrtc-dir libwebrtc --work-dir 'C:\wb' --sync-for libwebrtc_win_x64 @extra
-    - name: Upload packages
-      uses: actions/upload-artifact@v4
-      with:
-        name: packages-libwebrtc-win-${{ matrix.arch }}
-        path: C:\wb\_package\*
         compression-level: 0
