@@ -56,16 +56,17 @@ jobs:
       env:
         PLATFORM: ${{ github.event.inputs.platform || 'all' }}
       run: |
-        # linux shares the android/libwebrtc_linux source cache, so it syncs
-        # with the same targets (--sync-for) to keep the cache identical.
+        # linux shares the android source cache, so it syncs with the same
+        # targets (--sync-for) to keep the cache identical. windows has no
+        # release target: it syncs for the host OS only (empty sync_for).
         # The D:\ work drive on Windows is too small for a webrtc checkout.
         all='[
           {"target":"linux_x86_64","platform":"linux","os":"namespace-profile-webrtc-android",
-           "cache_backend":"namespace","sync_for":"android libwebrtc_linux_x64","work_dir":"."},
+           "cache_backend":"namespace","sync_for":"android","work_dir":"."},
           {"target":"macos_arm64","platform":"macos","os":"macos-26",
            "cache_backend":"none","sync_for":"apple","work_dir":"."},
           {"target":"windows_x86_64","platform":"windows","os":"windows-2025",
-           "cache_backend":"none","sync_for":"libwebrtc_win_x64","work_dir":"C:\\webrtc"}
+           "cache_backend":"none","sync_for":"","work_dir":"C:\\webrtc"}
         ]'
         echo "matrix=$(jq -c --arg p "$PLATFORM" '[.[] | select($p == "all" or .platform == $p)]' <<< "$all")" >> "$GITHUB_OUTPUT"
 
@@ -111,6 +112,6 @@ jobs:
           force: ${{ github.event.inputs.force_cache_update || 'false' }}
       - name: Build and run unittests
         run: |
-          python3 scripts/build.py test --sync-for ${{ matrix.sync_for }} \
+          python3 scripts/build.py test ${{ matrix.sync_for && format('--sync-for {0}', matrix.sync_for) || '' }} \
             ${{ steps.cache.outputs.fresh-arg }} ${{ steps.cache.outputs.history-arg }} \
             --work-dir '${{ matrix.work_dir }}' --commit '${{ steps.cache.outputs.commit }}'

@@ -9,10 +9,11 @@ between targets only when their patch sets differ.
 Usage:
     python3 scripts/build.py build apple apple_prefixed apple_prefixed_stripped
     python3 scripts/build.py build android android_prefixed android_prefixed_stripped
-    python3 scripts/build.py build libwebrtc_linux_x64 --libwebrtc-dir ../libwebrtc
-    python3 scripts/build.py build libwebrtc_win_arm64 --work-dir C:\\wb --libwebrtc-dir ..\\libwebrtc
     python3 scripts/build.py test
-    python3 scripts/build.py sync android libwebrtc_linux_x64   # checkout only
+    python3 scripts/build.py sync android   # checkout only
+
+The libwebrtc C++ wrapper packages for Linux and Windows are built in
+webrtc-sdk/libwebrtc-wrapper.
 
 The webrtc commit defaults to WEBRTC_COMMIT in ./VERSION (repository root).
 
@@ -31,8 +32,7 @@ local incremental builds.
 
 Set GIT_CACHE_PATH to share a gclient git cache between runs.
 
-Derived from shiguredo/webrtc-build (Apache-2.0, see NOTICE) and the
-libwebrtc build scripts from webrtc-sdk/libwebrtc.
+Derived from shiguredo/webrtc-build (Apache-2.0, see NOTICE).
 """
 
 import argparse
@@ -68,15 +68,13 @@ HOST = platform.system()  # 'Darwin' | 'Linux' | 'Windows'
 # ---------------------------------------------------------------------------
 
 class Target(NamedTuple):
-    kind: str            # 'apple' | 'android' | 'libwebrtc'
+    kind: str            # 'apple' | 'android'
     host: str            # platform.system() value the target must be built on
     target_os: List[str]  # gclient target_os entries the target needs
     patches: List[str]   # patches from scripts/patches, applied with -p1 in src
     extra_gn_args: List[str] = []
     package: str = ''    # file name written to the package dir
     prefix: str = ''     # apple: framework name prefix
-    os: str = ''         # libwebrtc: 'linux' | 'win'
-    cpu: str = ''        # libwebrtc: 'x64' | 'arm64'
 
 
 # Apple targets only need the host default (mac): target_os 'ios' would also
@@ -105,21 +103,6 @@ ANDROID_PATCHES = [
     'android_webrtc_version.patch',
     'fix_mocks.patch',
 ]
-
-# Patches live in the libwebrtc checkout (<libwebrtc-dir>/patches) and are
-# tied to the WebRTC milestone; update together with libwebrtc.
-LIBWEBRTC_PATCHES = {
-    'linux': [
-        'custom_audio_source_m150.patch',
-        'add_libwebrtc_build_target.patch',
-        'fix_desktop_capture_compile.patch',
-    ],
-    'win': [
-        'custom_audio_source_m150.patch',
-        'add_libwebrtc_build_target.patch',
-        'allow_176k4_192k_shared_mode_formats.patch',
-    ],
-}
 
 TARGETS: Dict[str, Target] = {
     'apple': Target(
@@ -150,14 +133,6 @@ TARGETS: Dict[str, Target] = {
         extra_gn_args=ANDROID_STRIPPED_GN_ARGS,
         package='libwebrtc_prefixed_stripped.aar'),
 }
-for _cpu in ('x64', 'arm64'):
-    TARGETS[f'libwebrtc_linux_{_cpu}'] = Target(
-        kind='libwebrtc', host='Linux', target_os=['linux'],
-        patches=[], os='linux', cpu=_cpu)
-    TARGETS[f'libwebrtc_win_{_cpu}'] = Target(
-        kind='libwebrtc', host='Windows', target_os=['win'],
-        patches=[], os='win', cpu=_cpu)
-
 # Shared by the android and unit test builds.
 COMMON_GN_ARGS = [
     'rtc_use_h264=false',
@@ -311,17 +286,6 @@ def write_checksums(path: str):
     logging.info('sha256 %s: %s', os.path.basename(path), h.hexdigest())
 
 
-def zip_dir(src_dir: str, zip_path: str):
-    """Zip src_dir, keeping its basename as the top-level directory."""
-    rm_rf(zip_path)
-    base = os.path.dirname(src_dir)
-    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for root, _, files in os.walk(src_dir):
-            for name in files:
-                full = os.path.join(root, name)
-                zf.write(full, os.path.relpath(full, base))
-
-
 def gn_args_str(args: List[str]) -> str:
     return ' '.join(args)
 
@@ -352,8 +316,6 @@ class Context:
         self.no_history = getattr(args, 'no_history', False)
         self.apple_slices = getattr(args, 'apple_slices', None) or []
         self.android_archs = getattr(args, 'android_archs', None) or []
-        self.libwebrtc_dir = os.path.abspath(
-            args.libwebrtc_dir) if getattr(args, 'libwebrtc_dir', None) else None
 
         self.version = read_version_file(os.path.join(ROOT_DIR, 'VERSION'))
         self.commit = args.commit or self.version['WEBRTC_COMMIT']
@@ -571,7 +533,6 @@ def reset_tree(ctx: Context):
     third_party = os.path.join(ctx.src_dir, 'third_party')
     if os.path.isdir(os.path.join(third_party, '.git')):
         run(['git', 'reset', '--hard', '--quiet'], cwd=third_party)
-    rm_rf(os.path.join(ctx.src_dir, 'libwebrtc'))
     rm_rf(android_version_java_path(ctx))
     ctx.applied = ()
 
@@ -908,102 +869,6 @@ def assemble_android(ctx: Context, name: str, t: Target, parts_dir: str):
 
 
 # ---------------------------------------------------------------------------
-# libwebrtc: portable C++ wrapper for Linux / Windows
-# ---------------------------------------------------------------------------
-
-LIBWEBRTC_ITEMS = ['include', 'src', 'patches', 'test', 'BUILD.gn', 'LICENSE']
-
-
-def build_libwebrtc(ctx: Context, name: str, t: Target):
-    if not ctx.libwebrtc_dir or not os.path.isfile(
-            os.path.join(ctx.libwebrtc_dir, 'BUILD.gn')):
-        raise RuntimeError('--libwebrtc-dir must point to a webrtc-sdk/libwebrtc checkout')
-
-    patches = LIBWEBRTC_PATCHES[t.os]
-    key = ('libwebrtc', ctx.libwebrtc_dir, *patches)
-    if ctx.applied != key:
-        if ctx.applied != ():
-            reset_tree(ctx)
-        dst = os.path.join(ctx.src_dir, 'libwebrtc')
-        mkdir_p(dst)
-        for item in LIBWEBRTC_ITEMS:
-            src = os.path.join(ctx.libwebrtc_dir, item)
-            if os.path.isdir(src):
-                shutil.copytree(src, os.path.join(dst, item))
-            else:
-                shutil.copy2(src, dst)
-        for patch in patches:
-            run(['git', 'apply', '-v', '--ignore-space-change', '--ignore-whitespace',
-                 '--whitespace=nowarn', os.path.join(ctx.libwebrtc_dir, 'patches', patch)],
-                cwd=ctx.src_dir)
-        ctx.applied = key
-
-    d = 'true' if ctx.debug else 'false'
-    common = [
-        f'is_debug={d}',
-        f'target_cpu="{t.cpu}"',
-        'rtc_enable_protobuf=false',
-        'rtc_include_tests=true',
-        'rtc_build_tools=false',
-        'rtc_build_examples=false',
-        'rtc_libvpx_build_vp9=true',
-        'enable_libaom=true',
-        'is_component_build=false',
-        'ffmpeg_branding="Chrome"',
-        'rtc_use_h264=true',
-        'rtc_use_h265=true',
-        'symbol_level=0',
-        'enable_iterator_debugging=false',
-    ]
-    if t.os == 'linux':
-        run([sys.executable, os.path.join('build', 'linux', 'sysroot_scripts',
-                                          'install-sysroot.py'), f'--arch={t.cpu}'],
-            cwd=ctx.src_dir)
-        # use_clang_modules=false avoids C++ module compile failures that leave
-        # the build incomplete.
-        gn_args = [*common,
-                   'target_os="linux"',
-                   'treat_warnings_as_errors=false',
-                   'use_llvm_libatomic=false',
-                   'use_custom_libcxx=true',
-                   'use_custom_libcxx_for_host=true',
-                   'use_clang_modules=false',
-                   'enable_stripping=true',
-                   'rtc_use_pipewire=true',
-                   'use_rtti=true',
-                   'rtc_use_x11=true']
-    else:
-        gn_args = [*common,
-                   'is_clang=true',
-                   'use_custom_libcxx=false']
-
-    out = ctx.out_dir(name)
-    gn_gen(ctx, out, gn_args)
-    ninja(ctx, out, ['libwebrtc', 'libwebrtc_cpp_api_unittests'])
-
-    # Directory names inside the zips are kept from the old libwebrtc releases.
-    if t.os == 'linux':
-        stage_name = f'linux-{t.cpu}-{ctx.config}'
-        libs = ['libwebrtc.so']
-    else:
-        stage_name = f'libwebrtc-{t.cpu}-{ctx.config}'
-        libs = ['libwebrtc.dll.lib', 'libwebrtc.dll']
-    stage = os.path.join(out, 'package', stage_name)
-    rm_rf(stage)
-    mkdir_p(os.path.join(stage, 'lib'))
-    for lib in libs:
-        shutil.copy2(os.path.join(out, lib), os.path.join(stage, 'lib'))
-    shutil.copy2(os.path.join(ctx.libwebrtc_dir, 'LICENSE'), stage)
-    shutil.copytree(os.path.join(ctx.libwebrtc_dir, 'include'), os.path.join(stage, 'include'),
-                    ignore=shutil.ignore_patterns('.*'))
-
-    zip_name = package_name(name, ctx.config)
-    zip_path = os.path.join(out, 'package', zip_name)
-    zip_dir(stage, zip_path)
-    publish(ctx, zip_path, zip_name)
-
-
-# ---------------------------------------------------------------------------
 # Unit tests (rtc_unittests, debug) on the host platform
 # ---------------------------------------------------------------------------
 
@@ -1079,15 +944,11 @@ def run_tests(ctx: Context):
 BUILDERS = {
     'apple': build_apple,
     'android': build_android,
-    'libwebrtc': build_libwebrtc,
 }
 
 
 def package_name(name: str, config: str) -> str:
-    t = TARGETS[name]
-    if t.kind == 'libwebrtc':
-        return f'libwebrtc-{t.os}-{t.cpu}-{config}.zip'
-    return t.package
+    return TARGETS[name].package
 
 
 def write_fake_packages(targets: List[str], package_dir: str, config: str):
@@ -1161,8 +1022,6 @@ def main():
     bp.add_argument('targets', nargs='+', choices=list(TARGETS), metavar='TARGET',
                     help=', '.join(TARGETS))
     bp.add_argument('--debug', action='store_true')
-    bp.add_argument('--libwebrtc-dir',
-                    help='webrtc-sdk/libwebrtc checkout (libwebrtc_* targets)')
     bp.add_argument('--apple-slices', type=lambda v: [x for x in v.split(',') if x],
                     help='apple targets: build only these comma-separated slices and archive '
                          'each one for assemble-apple (see apple-slices)')
@@ -1195,8 +1054,10 @@ def main():
     add_common_args(tp)
 
     sp = sub.add_parser('sync', help='fetch and gclient sync the checkout for the given targets')
-    sp.add_argument('targets', nargs='+', choices=list(TARGETS), metavar='TARGET',
-                    help=', '.join(TARGETS))
+    # No `choices`: argparse rejects an empty list against them (Python < 3.12).
+    sp.add_argument('targets', nargs='*', metavar='TARGET',
+                    help=', '.join(TARGETS) + ' (none: only the host OS, e.g. for unit tests '
+                         'on Windows)')
     add_common_args(sp)
 
     fp = sub.add_parser('fake', help='write placeholder packages (same names, with checksums) '
@@ -1241,6 +1102,9 @@ def main():
 
     if args.op in ('build', 'sync'):
         targets = list(dict.fromkeys(args.targets))
+        unknown = [n for n in targets if n not in TARGETS]
+        if unknown:
+            parser.error(f'unknown targets: {", ".join(unknown)} (choose from {", ".join(TARGETS)})')
         bad = [x for x in (getattr(args, 'apple_slices', None) or []) if x not in APPLE_SLICES]
         if bad:
             parser.error(f'unknown apple slices: {", ".join(bad)} (choose from {", ".join(APPLE_SLICES)})')

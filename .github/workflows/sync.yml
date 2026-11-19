@@ -46,14 +46,16 @@ jobs:
       env:
         PLATFORM: ${{ github.event.inputs.platform || 'all' }}
       run: |
-        # android and libwebrtc_linux share one checkout on a Namespace volume.
+        # android and the linux unit tests share one checkout on a Namespace
+        # volume. windows has no release target: it syncs for the host OS
+        # only, as the windows unit tests do.
         all='[
           {"id":"linux","os":"namespace-profile-webrtc-android","backend":"namespace",
-           "targets":"android libwebrtc_linux_x64","work_dir":"."},
+           "targets":"android","work_dir":"."},
           {"id":"apple","os":"macos-26","backend":"none",
            "targets":"apple","work_dir":"."},
           {"id":"windows","os":"windows-2022","backend":"none",
-           "targets":"libwebrtc_win_x64","work_dir":"C:\\wb"}
+           "targets":"","work_dir":"C:\\wb"}
         ]'
         echo "matrix=$(jq -c --arg p "$PLATFORM" '[.[] | select($p == "all" or .id == $p)]' <<< "$all")" >> "$GITHUB_OUTPUT"
 
