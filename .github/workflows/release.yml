@@ -24,7 +24,7 @@ on:
         description: 'Merged release PR number to (re)publish'
         required: true
       rebuild:
-        description: 'Build the packages again instead of reusing the PR build'
+        description: 'Build the packages again instead of reusing the PR build (packages already in the release are kept, never replaced)'
         type: boolean
         default: false
 
@@ -203,8 +203,30 @@ jobs:
         jq -r '"\nBuilt from \(env.GITHUB_REPOSITORY)@\(.repo) with the libwebrtc wrapper webrtc-sdk/libwebrtc@\(.libwebrtc) (\(.configuration))."' \
           "$RUNNER_TEMP/build-info.json" >> "$RUNNER_TEMP/notes.md"
         if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-          gh release upload "$TAG" artifacts/* --clobber -R "$GITHUB_REPOSITORY"
-          gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md" -R "$GITHUB_REPOSITORY"
+          # Never replace a published package: builds are not reproducible
+          # (dSYM UUIDs differ), and downstream manifests (Specs Package.swift,
+          # webrtc-xcframework) pin the sha256 of the published bytes. Upload
+          # only packages the release does not have yet; a new build of an
+          # existing package needs a new version.
+          published=$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          upload=()
+          kept=0
+          while read -r pkg; do
+            if grep -qxF "$pkg" <<< "$published"; then
+              echo "::notice::$pkg is already published in $TAG; keeping the published file"
+              kept=$((kept + 1))
+            else
+              upload+=("artifacts/$pkg" "artifacts/$pkg.shasum")
+            fi
+          done < <(python3 scripts/build.py packages)
+          if [ ${#upload[@]} -gt 0 ]; then
+            gh release upload "$TAG" "${upload[@]}" --clobber -R "$GITHUB_REPOSITORY"
+          fi
+          # The notes name the build inputs; keep them while they describe
+          # published packages.
+          if [ "$kept" -eq 0 ]; then
+            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md" -R "$GITHUB_REPOSITORY"
+          fi
         else
           gh release create "$TAG" artifacts/* -R "$GITHUB_REPOSITORY" \
             --target "${{ needs.prepare.outputs.merge_sha }}" --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md"

@@ -20,7 +20,10 @@ import sys
 import urllib.request
 from typing import Dict, List
 
-VERSION_RE = re.compile(r'^(\d+)\.(\d+)\.(\d+)$')
+# The patch is two digits (08, not 8): SwiftPM treats 1.2.8 and 1.2.08 as the
+# same version, so only one spelling may ever be tagged. Three or more digits
+# must not start with 0.
+VERSION_RE = re.compile(r'^(\d+)\.(\d+)\.(\d{2}|[1-9]\d{2,})$')
 DEFAULT_WEBRTC_REPO = 'webrtc-sdk/webrtc'
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -28,7 +31,7 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def parse_version(version: str):
     m = VERSION_RE.match(version)
     if not m:
-        raise SystemExit(f'invalid version {version!r}: expected <milestone>.<branch>.<patch>, '
+        raise SystemExit(f'invalid version {version!r}: expected <milestone>.<branch>.<patch> with a two-digit patch, '
                          'e.g. 150.7871.08')
     return m.groups()
 
