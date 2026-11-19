@@ -1,0 +1,330 @@
+name: release
+
+# Publishes a release when a release/<version> PR is merged:
+#   1. reuse the packages of a complete release build of the PR head (or build
+#      them again from the merge commit),
+#   2. check the package set, then create the m<version> tag and GitHub
+#      release with the webrtc commit list, the build inputs and every package
+#      (one zip layer) with its <name>.shasum,
+#   3. publish LiveKitWebRTC to livekit/webrtc-xcframework,
+#   4. notify downstream repositories (repository_dispatch `webrtc-release`).
+#
+# Secrets: XCFRAMEWORK_PAT (livekit publish, skipped when unset),
+# GitHub App (variable RELEASE_APP_CLIENT_ID, secret RELEASE_APP_PRIVATE_KEY,
+# installed on vars.DOWNSTREAM_REPOS) for the downstream dispatch, skipped when
+# unset.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'Merged release PR number to (re)publish'
+        required: true
+      rebuild:
+        description: 'Build the packages again instead of reusing the PR build (packages already in the release are kept, never replaced)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: read
+  pull-requests: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+  # Queue every waiting release: by default a newer run cancels the pending
+  # one, which would leave that merged release unpublished.
+  queue: max
+
+env:
+  WEBRTC_REPO: ${{ vars.WEBRTC_REPO || 'webrtc-sdk/webrtc' }}
+
+jobs:
+  prepare:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged && startsWith(github.event.pull_request.head.ref, 'release/'))
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.info.outputs.version }}
+      commit: ${{ steps.info.outputs.commit }}
+      base_commit: ${{ steps.info.outputs.base_commit }}
+      merge_sha: ${{ steps.info.outputs.merge_sha }}
+      build_run: ${{ steps.build.outputs.run_id }}
+    steps:
+    - name: Resolve PR
+      id: pr
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PR: ${{ inputs.pr || github.event.pull_request.number }}
+      run: |
+        gh pr view "$PR" -R "$GITHUB_REPOSITORY" --json headRefName,headRefOid,mergeCommit,state \
+          --jq '"head_ref=\(.headRefName)\nhead_sha=\(.headRefOid)\nmerge_sha=\(.mergeCommit.oid // "")\nmerged=\(.state == "MERGED")"' >> "$GITHUB_OUTPUT"
+    - uses: actions/checkout@v5
+      with:
+        ref: ${{ steps.pr.outputs.merge_sha }}
+        fetch-depth: 0
+    - name: Release info
+      id: info
+      env:
+        HEAD_REF: ${{ steps.pr.outputs.head_ref }}
+        MERGED: ${{ steps.pr.outputs.merged }}
+        MERGE_SHA: ${{ steps.pr.outputs.merge_sha }}
+      run: |
+        set -euo pipefail
+        [ "$MERGED" = true ] && [[ "$HEAD_REF" == release/* ]] || { echo "::error::not a merged release PR"; exit 1; }
+        VERSION="${HEAD_REF#release/}"
+        python3 scripts/release.py check-version "$VERSION"
+        [ "$(python3 scripts/release.py get --key WEBRTC_VERSION)" = "$VERSION" ] || { echo "::error::VERSION does not match $VERSION"; exit 1; }
+        # Previous release = VERSION before the merge (first parent).
+        git show "$MERGE_SHA^1:VERSION" > "$RUNNER_TEMP/BASE_VERSION"
+        {
+          echo "version=$VERSION"
+          echo "commit=$(python3 scripts/release.py get --key WEBRTC_COMMIT)"
+          echo "base_commit=$(python3 scripts/release.py get --key WEBRTC_COMMIT --file "$RUNNER_TEMP/BASE_VERSION")"
+          echo "merge_sha=$MERGE_SHA"
+        } >> "$GITHUB_OUTPUT"
+    # Reuse only a build that produced the release packages: its build-info
+    # must show the release configuration, every platform, the VERSION
+    # commit, and no placeholders (unless this repository runs dry), and none
+    # of its artifacts may have expired. Otherwise build again.
+    - name: Find a reusable build of the PR head
+      id: build
+      env:
+        GH_TOKEN: ${{ github.token }}
+        HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        COMMIT: ${{ steps.info.outputs.commit }}
+        ALLOW_DRY_RUN: ${{ vars.BUILD_DRY_RUN == 'true' }}
+        REBUILD: ${{ inputs.rebuild || false }}
+      run: |
+        set -euo pipefail
+        RUN=''
+        if [ "$REBUILD" = true ]; then
+          echo "rebuild requested"
+        else
+          for id in $(gh run list -R "$GITHUB_REPOSITORY" --workflow build.yml --commit "$HEAD_SHA" \
+                        --status success --limit 20 --json databaseId --jq '.[].databaseId'); do
+            arts=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/artifacts?per_page=100" \
+                     --jq '.artifacts[] | "\(.name) \(.expired)"')
+            if ! grep -qx 'build-info false' <<< "$arts"; then
+              echo "run $id: no build-info"; continue
+            fi
+            if grep -q '^packages-.* true$' <<< "$arts"; then
+              echo "run $id: packages expired"; continue
+            fi
+            rm -rf "$RUNNER_TEMP/build-info"
+            gh run download "$id" -R "$GITHUB_REPOSITORY" -n build-info -D "$RUNNER_TEMP/build-info"
+            info="$RUNNER_TEMP/build-info/build-info.json"
+            cat "$info"
+            if jq -e --arg commit "$COMMIT" --argjson dry "$ALLOW_DRY_RUN" \
+                 '.webrtc == $commit and .configuration == "release" and .platforms == "all"
+                  and (.dry_run == false or $dry)' "$info" >/dev/null; then
+              RUN=$id; break
+            fi
+            echo "run $id: not a release build of $COMMIT"
+          done
+        fi
+        echo "run_id=$RUN" >> "$GITHUB_OUTPUT"
+        if [ -n "$RUN" ]; then
+          echo "- reusing packages from build run [$RUN]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$RUN)" >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "- no reusable build for $HEAD_SHA; building now" >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.build_run == ''
+    uses: ./.github/workflows/build.yml
+    with:
+      commitHash: ${{ needs.prepare.outputs.commit }}
+      # Scripts, patches and VERSION of the release itself, not of the
+      # current branch (matters when republishing an older PR). The YAML of
+      # build.yml still comes from this workflow's revision.
+      ref: ${{ needs.prepare.outputs.merge_sha }}
+    secrets: inherit
+
+  publish-release:
+    needs: [prepare, build]
+    if: always() && needs.prepare.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped')
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      url: ${{ steps.release.outputs.url }}
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: ${{ needs.prepare.outputs.merge_sha }}
+    - name: Download packages (earlier build)
+      if: needs.prepare.outputs.build_run != ''
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh run download "${{ needs.prepare.outputs.build_run }}" -R "$GITHUB_REPOSITORY" -p 'packages-*' -D "$RUNNER_TEMP/dl"
+        mkdir -p artifacts && find "$RUNNER_TEMP/dl" -type f -exec mv {} artifacts/ \;
+        gh run download "${{ needs.prepare.outputs.build_run }}" -R "$GITHUB_REPOSITORY" -n build-info -D "$RUNNER_TEMP"
+    - name: Download packages (this run)
+      if: needs.prepare.outputs.build_run == ''
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+        pattern: packages-*
+        merge-multiple: true
+    - name: Download build info (this run)
+      if: needs.prepare.outputs.build_run == ''
+      uses: actions/download-artifact@v4
+      with:
+        name: build-info
+        path: ${{ runner.temp }}
+    - name: Verify packages
+      working-directory: artifacts
+      run: |
+        set -euo pipefail
+        ls -l
+        # Exactly the release package set (scripts/build.py packages), each
+        # with its checksum file.
+        python3 ../scripts/build.py packages | while read -r f; do echo "$f"; echo "$f.shasum"; done | sort > "$RUNNER_TEMP/expected"
+        ls -1 | sort > "$RUNNER_TEMP/actual"
+        if ! diff -u "$RUNNER_TEMP/expected" "$RUNNER_TEMP/actual"; then
+          echo "::error::package set differs from scripts/build.py packages (- missing, + unexpected)"; exit 1
+        fi
+        shasum -a 256 -c *.shasum
+    - name: Create release
+      id: release
+      env:
+        GH_TOKEN: ${{ github.token }}
+        VERSION: ${{ needs.prepare.outputs.version }}
+      run: |
+        set -euo pipefail
+        TAG="m$VERSION"
+        python3 scripts/release.py notes --base "${{ needs.prepare.outputs.base_commit }}" \
+          --head "${{ needs.prepare.outputs.commit }}" --version "$VERSION" --out "$RUNNER_TEMP/notes.md"
+        # Record the exact build inputs.
+        jq -r '"\nBuilt from \(env.GITHUB_REPOSITORY)@\(.repo) with the libwebrtc wrapper webrtc-sdk/libwebrtc@\(.libwebrtc) (\(.configuration))."' \
+          "$RUNNER_TEMP/build-info.json" >> "$RUNNER_TEMP/notes.md"
+        if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          # Never replace a published package: builds are not reproducible
+          # (dSYM UUIDs differ), and downstream manifests (Specs Package.swift,
+          # webrtc-xcframework) pin the sha256 of the published bytes. Upload
+          # only packages the release does not have yet; a new build of an
+          # existing package needs a new version.
+          published=$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          upload=()
+          kept=0
+          while read -r pkg; do
+            if grep -qxF "$pkg" <<< "$published"; then
+              echo "::notice::$pkg is already published in $TAG; keeping the published file"
+              kept=$((kept + 1))
+            else
+              upload+=("artifacts/$pkg" "artifacts/$pkg.shasum")
+            fi
+          done < <(python3 scripts/build.py packages)
+          if [ ${#upload[@]} -gt 0 ]; then
+            gh release upload "$TAG" "${upload[@]}" --clobber -R "$GITHUB_REPOSITORY"
+          fi
+          # The notes name the build inputs; keep them while they describe
+          # published packages.
+          if [ "$kept" -eq 0 ]; then
+            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md" -R "$GITHUB_REPOSITORY"
+          fi
+        else
+          gh release create "$TAG" artifacts/* -R "$GITHUB_REPOSITORY" \
+            --target "${{ needs.prepare.outputs.merge_sha }}" --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+        fi
+        echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+        echo "url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$TAG" >> "$GITHUB_OUTPUT"
+        echo "- released [$TAG]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$TAG)" >> "$GITHUB_STEP_SUMMARY"
+
+  publish-xcframework:
+    name: Publish LiveKitWebRTC
+    needs: [prepare, publish-release]
+    if: always() && needs.publish-release.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check secret
+      id: check
+      env:
+        PAT: ${{ secrets.XCFRAMEWORK_PAT }}
+      run: |
+        if [ -z "$PAT" ]; then echo "::notice::XCFRAMEWORK_PAT not set; skipping"; echo "skip=true" >> "$GITHUB_OUTPUT"; fi
+    - uses: actions/checkout@v5
+      if: steps.check.outputs.skip != 'true'
+      with:
+        ref: ${{ needs.prepare.outputs.merge_sha }}
+    - name: Download LiveKitWebRTC.xcframework.zip
+      if: steps.check.outputs.skip != 'true'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: gh release download "${{ needs.publish-release.outputs.tag }}" -R "$GITHUB_REPOSITORY" -p LiveKitWebRTC.xcframework.zip -D artifacts
+    - name: Render Package.swift and podspec
+      if: steps.check.outputs.skip != 'true'
+      env:
+        VERSION: ${{ needs.prepare.outputs.version }}
+      run: |
+        CHECKSUM=$(sha256sum artifacts/LiveKitWebRTC.xcframework.zip | awk '{print $1}')
+        mkdir -p out
+        for f in Package.swift LiveKitWebRTC.podspec; do
+          sed -e "s|{{VERSION}}|${VERSION}|g" \
+              -e "s|{{CHECKSUM}}|${CHECKSUM}|g" \
+              ".github/templates/$f" > "out/$f"
+        done
+    - uses: livekit/publish-xcframework-action@3b8645334fb62b0fd1d7067067819bcd111db157 # main
+      if: steps.check.outputs.skip != 'true'
+      with:
+        xcframework-zip: artifacts/LiveKitWebRTC.xcframework.zip
+        version: ${{ needs.prepare.outputs.version }}
+        hosting-repo: livekit/webrtc-xcframework
+        files: |
+          out/Package.swift:Package.swift
+          out/LiveKitWebRTC.podspec:LiveKitWebRTC.podspec
+        token: ${{ secrets.XCFRAMEWORK_PAT }}
+
+  notify-downstream:
+    needs: [prepare, publish-release]
+    if: always() && needs.publish-release.result == 'success'
+    runs-on: ubuntu-latest
+    env:
+      REPOS: ${{ vars.DOWNSTREAM_REPOS || 'webrtc-sdk/Specs webrtc-sdk/android' }}
+    steps:
+    - name: Resolve downstream repositories
+      id: repos
+      run: |
+        set -euo pipefail
+        list=$(tr ' ' '\n' <<< "$REPOS" | grep .)
+        owners=$(cut -d/ -f1 <<< "$list" | sort -u)
+        if [ "$(wc -l <<< "$owners")" -ne 1 ]; then
+          echo "::error::DOWNSTREAM_REPOS must share one owner (one App installation): $REPOS"; exit 1
+        fi
+        echo "owner=$owners" >> "$GITHUB_OUTPUT"
+        echo "names=$(cut -d/ -f2 <<< "$list" | paste -sd, -)" >> "$GITHUB_OUTPUT"
+    - name: Create GitHub App token
+      id: app
+      if: vars.RELEASE_APP_CLIENT_ID != ''
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+        private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+        owner: ${{ steps.repos.outputs.owner }}
+        repositories: ${{ steps.repos.outputs.names }}
+        # POST /repos/{repo}/dispatches needs contents: write.
+        permission-contents: write
+    - name: Dispatch webrtc-release
+      env:
+        GH_TOKEN: ${{ steps.app.outputs.token }}
+        VERSION: ${{ needs.prepare.outputs.version }}
+        TAG: ${{ needs.publish-release.outputs.tag }}
+        COMMIT: ${{ needs.prepare.outputs.commit }}
+        URL: ${{ needs.publish-release.outputs.url }}
+      run: |
+        set -euo pipefail
+        if [ -z "$GH_TOKEN" ]; then echo "::notice::GitHub App not configured (RELEASE_APP_CLIENT_ID); skipping"; exit 0; fi
+        for repo in $REPOS; do
+          gh api "repos/$repo/dispatches" -f event_type=webrtc-release \
+            -f "client_payload[version]=$VERSION" -f "client_payload[tag]=$TAG" \
+            -f "client_payload[commit]=$COMMIT" -f "client_payload[release_url]=$URL" \
+            -f "client_payload[source_repo]=$GITHUB_REPOSITORY"
+          echo "- notified $repo" >> "$GITHUB_STEP_SUMMARY"
+        done

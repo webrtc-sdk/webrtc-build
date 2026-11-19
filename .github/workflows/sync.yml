@@ -1,0 +1,102 @@
+name: sync
+
+# Checks that gclient sync works for every host and that the source caches
+# are reused. Durations and sizes are written to the job summary.
+#
+# The Linux source cache (see .github/actions/source-cache) is shared with the
+# build and unittests workflows and is updated only when
+#   1. the webrtc commit changes, or
+#   2. force_cache_update is checked (rebuilds the cache from scratch).
+# apple and windows have no cache and always sync from scratch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      commitHash:
+        description: 'webrtc-sdk/webrtc commit hash (default: WEBRTC_COMMIT in VERSION)'
+        default: ''
+        required: false
+      force_cache_update:
+        description: 'Rebuild the source caches from scratch'
+        type: boolean
+        default: false
+      platform:
+        description: 'Platform to sync'
+        type: choice
+        default: all
+        options:
+          - all
+          - linux
+          - apple
+          - windows
+
+permissions:
+  contents: read
+
+env:
+  WEBRTC_REPO_URL: https://github.com/${{ vars.WEBRTC_REPO || 'webrtc-sdk/webrtc' }}.git
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+    - id: plan
+      env:
+        PLATFORM: ${{ github.event.inputs.platform || 'all' }}
+      run: |
+        # android and libwebrtc_linux share one checkout on a Namespace volume.
+        all='[
+          {"id":"linux","os":"namespace-profile-webrtc-android","backend":"namespace",
+           "targets":"android libwebrtc_linux_x64","work_dir":"."},
+          {"id":"apple","os":"macos-26","backend":"none",
+           "targets":"apple","work_dir":"."},
+          {"id":"windows","os":"windows-2022","backend":"none",
+           "targets":"libwebrtc_win_x64","work_dir":"C:\\wb"}
+        ]'
+        echo "matrix=$(jq -c --arg p "$PLATFORM" '[.[] | select($p == "all" or .id == $p)]' <<< "$all")" >> "$GITHUB_OUTPUT"
+
+  sync:
+    name: sync (${{ matrix.id }})
+    needs: plan
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+    - uses: actions/checkout@v5
+    - name: Source cache
+      id: cache
+      uses: ./.github/actions/source-cache
+      with:
+        backend: ${{ matrix.backend }}
+        id: ${{ matrix.id }}
+        commit: ${{ github.event.inputs.commitHash }}
+        force: ${{ github.event.inputs.force_cache_update }}
+    - name: Sync
+      # Ends the step (keeping its log) instead of hanging until the job limit.
+      timeout-minutes: 60
+      run: |
+        start=$(date +%s)
+        python3 scripts/build.py sync ${{ matrix.targets }} ${{ steps.cache.outputs.fresh-arg }} ${{ steps.cache.outputs.history-arg }} \
+          --work-dir '${{ matrix.work_dir }}' --commit '${{ steps.cache.outputs.commit }}' 2>&1 | tee sync.log
+        if grep -q 'skipping sync' sync.log; then result='skipped, checkout already at this commit'
+        elif grep -q 'fast sync' sync.log; then result='fast sync, DEPS unchanged (src checkout + runhooks)'
+        elif [ -n '${{ steps.cache.outputs.fresh-arg }}' ]; then result='fresh sync'
+        else result='synced'; fi
+        echo "- sync: $(( $(date +%s) - start ))s, $result" >> "$GITHUB_STEP_SUMMARY"
+    - name: Report sizes
+      if: always()
+      run: |
+        cat '${{ matrix.work_dir }}/_source/webrtc/.gclient' || true
+        { echo '```'
+          # src/resources should be ~empty: test resources are not cached.
+          du -sh '${{ matrix.work_dir }}/_source/depot_tools' '${{ matrix.work_dir }}/_source/webrtc/src' '${{ matrix.work_dir }}/_source/webrtc/src/resources' 2>/dev/null
+          df -h '${{ matrix.work_dir }}' | tail -1
+          echo '```'; } >> "$GITHUB_STEP_SUMMARY"

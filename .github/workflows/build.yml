@@ -1,12 +1,16 @@
 name: build
 
+# Builds every release package. Runs on release PRs (release-pr.yml), by hand,
+# and from release.yml when a merged release PR has no successful build to reuse.
+# Publishing lives in release.yml.
+
 on:
   workflow_dispatch:
     inputs:
       commitHash:
-        description: 'webrtc-sdk commit hash'
+        description: 'webrtc commit hash (default: WEBRTC_COMMIT in VERSION)'
         default: ''
-        required: true
+        required: false
       configuration:
         description: 'build configuration'
         default: 'release'
@@ -15,129 +19,421 @@ on:
         options:
           - release
           - debug
-  push:
-    paths-ignore:
-      - '**.md'
-      - 'LICENSE'
-      - 'NOTICE'
-      - '.gitignore'
-      - '.dockerignore'
-    branches-ignore:
-      - daily
-    tags:
-      - '*'
+      libwebrtcRef:
+        description: 'webrtc-sdk/libwebrtc ref for the libwebrtc builds'
+        default: 'main'
+        required: false
+      force_cache_update:
+        description: 'Rebuild the Linux source cache from scratch'
+        type: boolean
+        default: false
+      dry_run:
+        description: 'Upload placeholder packages instead of building (tests the release flow)'
+        type: boolean
+        default: false
+      platforms:
+        description: 'Packages to build'
+        type: choice
+        default: all
+        options:
+          - all
+          - apple
+          - android
+          - libwebrtc
+  workflow_call:
+    inputs:
+      commitHash:
+        type: string
+        default: ''
+      configuration:
+        type: string
+        default: 'release'
+      libwebrtcRef:
+        type: string
+        default: 'main'
+      force_cache_update:
+        type: boolean
+        default: false
+      dry_run:
+        type: boolean
+        default: false
+      platforms:
+        type: string
+        default: all
+      ref:
+        description: 'revision of this repository to build from (default: the calling revision)'
+        type: string
+        default: ''
+  pull_request:
+    branches: [main]
+    paths:
+      - 'VERSION'
+      - 'scripts/**'
+      - '.github/workflows/build.yml'
+      - '.github/actions/**'
+
+concurrency:
+  # A newer push to a release PR supersedes the running build.
+  group: build-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 permissions:
-  packages: write
-  contents: write
-  actions: read
+  contents: read
+
+env:
+  CONFIG_ARGS: ${{ inputs.configuration == 'debug' && '--debug' || '' }}
+  WEBRTC_REPO_URL: https://github.com/${{ vars.WEBRTC_REPO || 'webrtc-sdk/webrtc' }}.git
+
+# The Linux source cache (.github/actions/source-cache, Namespace volume) is
+# shared by the android and libwebrtc_linux jobs and the sync and unittests
+# workflows. It is updated only when the webrtc commit changes or
+# force_cache_update is checked. Jobs sharing it sync the same target_os
+# (--sync-for). GitHub-hosted macOS/Windows jobs sync from scratch.
+
+# Inputs are resolved once (resolve job) and every job builds exactly those
+# revisions: the webrtc commit, the webrtc-sdk/libwebrtc wrapper commit and the
+# revision of this repository (scripts, patches, VERSION; input `ref` lets
+# release.yml pin an older release). The YAML of this workflow itself always
+# comes from the caller's revision. The resolved values are uploaded as the
+# build-info artifact, which release.yml checks before reusing the packages.
+
+# Dry run (input dry_run, or repository variable BUILD_DRY_RUN=true, e.g. in a
+# test repository): skip every build job and upload placeholder packages with
+# the real names and checksums instead.
 
 jobs:
+  resolve:
+    name: resolve inputs
+    runs-on: ubuntu-latest
+    outputs:
+      repo: ${{ steps.resolve.outputs.repo }}
+      webrtc: ${{ steps.resolve.outputs.webrtc }}
+      libwebrtc: ${{ steps.resolve.outputs.libwebrtc }}
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: ${{ inputs.ref }}
+    - name: Resolve revisions
+      id: resolve
+      env:
+        GH_TOKEN: ${{ github.token }}
+        WEBRTC_REPO: ${{ vars.WEBRTC_REPO || 'webrtc-sdk/webrtc' }}
+        COMMIT: ${{ inputs.commitHash }}
+        LIBWEBRTC_REF: ${{ inputs.libwebrtcRef || 'main' }}
+        CONFIGURATION: ${{ inputs.configuration || 'release' }}
+        PLATFORMS: ${{ inputs.platforms || 'all' }}
+        DRY_RUN: ${{ (inputs.dry_run || vars.BUILD_DRY_RUN == 'true') && 'true' || 'false' }}
+      run: |
+        set -euo pipefail
+        REPO_SHA=$(git rev-parse HEAD)
+        WEBRTC=$(gh api "repos/$WEBRTC_REPO/commits/${COMMIT:-$(python3 scripts/release.py get --key WEBRTC_COMMIT)}" --jq .sha)
+        LIBWEBRTC=$(gh api "repos/webrtc-sdk/libwebrtc/commits/$LIBWEBRTC_REF" --jq .sha)
+        {
+          echo "repo=$REPO_SHA"
+          echo "webrtc=$WEBRTC"
+          echo "libwebrtc=$LIBWEBRTC"
+        } >> "$GITHUB_OUTPUT"
+        mkdir -p build-info
+        jq -n --arg repo "$REPO_SHA" --arg webrtc_repo "$WEBRTC_REPO" --arg webrtc "$WEBRTC" \
+          --arg libwebrtc "$LIBWEBRTC" --arg configuration "$CONFIGURATION" \
+          --arg platforms "$PLATFORMS" --argjson dry_run "$DRY_RUN" --arg event "$GITHUB_EVENT_NAME" \
+          '{repo: $repo, webrtc_repo: $webrtc_repo, webrtc: $webrtc, libwebrtc: $libwebrtc,
+            configuration: $configuration, platforms: $platforms, dry_run: $dry_run, event: $event}' \
+          | tee build-info/build-info.json
+        {
+          echo "- this repository: \`$REPO_SHA\`"
+          echo "- webrtc ($WEBRTC_REPO): \`$WEBRTC\`"
+          echo "- libwebrtc wrapper: \`$LIBWEBRTC\`"
+          echo "- configuration: $CONFIGURATION, platforms: $PLATFORMS, dry run: $DRY_RUN"
+        } >> "$GITHUB_STEP_SUMMARY"
+    - uses: actions/upload-artifact@v4
+      with:
+        name: build-info
+        path: build-info/build-info.json
+
+  dry-run:
+    if: inputs.dry_run || vars.BUILD_DRY_RUN == 'true'
+    needs: resolve
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: ${{ needs.resolve.outputs.repo }}
+    - run: python3 scripts/build.py fake $CONFIG_ARGS
+    - uses: actions/upload-artifact@v4
+      with:
+        name: packages-dry-run
+        path: _package/*
+
+  # Each platform syncs once, then fans out one compile job per unit
+  # (apple: target x slice, android: target x arch) and assembles the
+  # package from the units. GitHub-hosted macOS jobs share no disk, so
+  # sync-apple hands its shallow checkout to the slice jobs as an artifact;
+  # Linux jobs share the Namespace cache volume.
+
+  sync-apple:
+    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') && contains(fromJSON('["all", "apple"]'), inputs.platforms || 'all') }}
+    name: gclient sync (apple)
+    needs: resolve
+    runs-on: macos-26
+    outputs:
+      slices: ${{ steps.slices.outputs.slices }}
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: ${{ needs.resolve.outputs.repo }}
+    - name: Select Xcode 26.0
+      run: sudo xcode-select --switch /Applications/Xcode_26.0.app/Contents/Developer
+    - name: Source cache
+      id: cache
+      uses: ./.github/actions/source-cache
+      with:
+        backend: none
+        commit: ${{ needs.resolve.outputs.webrtc }}
+    - name: Sync
+      run: |
+        python3 scripts/build.py sync apple ${{ steps.cache.outputs.history-arg }} \
+          --commit '${{ steps.cache.outputs.commit }}'
+    - name: Slices
+      id: slices
+      run: echo "slices=$(python3 scripts/build.py apple-slices)" >> "$GITHUB_OUTPUT"
+    - name: Pack checkout
+      run: |
+        tar -cf - _source | zstd -T0 -3 -q -o "$RUNNER_TEMP/source-apple.tar.zst"
+        ls -lh "$RUNNER_TEMP/source-apple.tar.zst"
+    - uses: actions/upload-artifact@v4
+      with:
+        name: source-apple
+        path: ${{ runner.temp }}/source-apple.tar.zst
+        compression-level: 0
+        retention-days: 1
+
   build-apple:
-    defaults:
-      run:
-        working-directory: ./build
+    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
+    name: build (${{ matrix.target }} ${{ matrix.slice }})
+    needs: [resolve, sync-apple]
     strategy:
       fail-fast: false
       matrix:
-        name:
-          - apple
-          - apple_prefixed
-          - apple_prefixed_stripped
+        target: [apple, apple_prefixed, apple_prefixed_stripped]
+        slice: ${{ fromJSON(needs.sync-apple.outputs.slices) }}
     runs-on: macos-26
     steps:
     - uses: actions/checkout@v5
+      with:
+        ref: ${{ needs.resolve.outputs.repo }}
     - name: Select Xcode 26.0
       run: sudo xcode-select --switch /Applications/Xcode_26.0.app/Contents/Developer
-    - name: Build
-      id: build
-      run: ./build.${{ matrix.name }}.sh "${{ github.event.inputs.commitHash }}" "${{ github.event.inputs.configuration || 'release' }}"
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
+    - uses: actions/download-artifact@v4
       with:
-        name: ${{ steps.build.outputs.framework_name }}.xcframework.zip
-        path: build/_package/${{ matrix.name }}/${{ steps.build.outputs.framework_name }}.xcframework.zip
-  build-linux:
-    defaults:
-      run:
-        working-directory: ./build
+        name: source-apple
+        path: ${{ runner.temp }}
+    - name: Unpack checkout
+      run: |
+        zstd -d -q -c "$RUNNER_TEMP/source-apple.tar.zst" | tar -xf -
+        rm "$RUNNER_TEMP/source-apple.tar.zst"
+    - name: Build
+      run: |
+        python3 scripts/build.py build ${{ matrix.target }} --apple-slices ${{ matrix.slice }} --no-sync $CONFIG_ARGS
+    - uses: actions/upload-artifact@v4
+      with:
+        name: apple-slice-${{ matrix.target }}-${{ matrix.slice }}
+        path: _package/apple-slices/*
+
+  assemble-apple:
+    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
+    name: assemble (${{ matrix.target }})
+    needs: [resolve, build-apple]
     strategy:
       fail-fast: false
       matrix:
-        name:
-          - android
-          - android_prefixed
-          - android_prefixed_stripped
+        target: [apple, apple_prefixed, apple_prefixed_stripped]
+    runs-on: macos-26
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: ${{ needs.resolve.outputs.repo }}
+    - name: Select Xcode 26.0
+      run: sudo xcode-select --switch /Applications/Xcode_26.0.app/Contents/Developer
+    - uses: actions/download-artifact@v4
+      with:
+        pattern: apple-slice-${{ matrix.target }}-*
+        path: slices
+        merge-multiple: true
+    - name: Assemble
+      run: python3 scripts/build.py assemble-apple ${{ matrix.target }} --slices-dir slices $CONFIG_ARGS
+    - uses: actions/upload-artifact@v4
+      with:
+        name: packages-${{ matrix.target }}
+        path: _package/*
+        compression-level: 0
+
+  # Linux: sync the shared checkout once on the Namespace cache volume; each
+  # compile job mounts it, so its own sync is skipped or a quick catch-up.
+  sync-linux:
+    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') && contains(fromJSON('["all", "android", "libwebrtc"]'), inputs.platforms || 'all') }}
+    name: gclient sync (linux)
+    needs: resolve
+    runs-on: namespace-profile-webrtc-android
+    outputs:
+      archs: ${{ steps.archs.outputs.archs }}
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: ${{ needs.resolve.outputs.repo }}
+    - name: Source cache
+      id: cache
+      uses: ./.github/actions/source-cache
+      with:
+        backend: namespace
+        id: linux
+        commit: ${{ needs.resolve.outputs.webrtc }}
+        force: ${{ inputs.force_cache_update || 'false' }}
+    - name: Sync
+      run: |
+        python3 scripts/build.py sync android libwebrtc_linux_x64 \
+          --commit '${{ steps.cache.outputs.commit }}' ${{ steps.cache.outputs.fresh-arg }}
+    - name: Archs
+      id: archs
+      run: echo "archs=$(python3 scripts/build.py android-archs)" >> "$GITHUB_OUTPUT"
+
+  build-android:
+    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') && contains(fromJSON('["all", "android"]'), inputs.platforms || 'all') }}
+    name: build (${{ matrix.target }} ${{ matrix.arch }})
+    needs: [resolve, sync-linux]
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [android, android_prefixed, android_prefixed_stripped]
+        arch: ${{ fromJSON(needs.sync-linux.outputs.archs) }}
     runs-on: namespace-profile-webrtc-android
     steps:
-    - uses: actions/checkout@v4
-    - run: ./build.${{ matrix.name }}.sh "${{ github.event.inputs.commitHash }}"
-    - name: Upload Artifact
+    - uses: actions/checkout@v5
+      with:
+        ref: ${{ needs.resolve.outputs.repo }}
+    - name: Install dependencies
+      run: sudo ./scripts/apt_install_x86_64.sh
+    - name: Source cache
+      uses: ./.github/actions/source-cache
+      with:
+        backend: namespace
+        id: linux
+    - name: Build
+      run: |
+        python3 scripts/build.py build ${{ matrix.target }} --android-archs ${{ matrix.arch }} \
+          --sync-for android libwebrtc_linux_x64 \
+          --commit '${{ needs.resolve.outputs.webrtc }}' $CONFIG_ARGS
+    - uses: actions/upload-artifact@v4
+      with:
+        name: android-part-${{ matrix.target }}-${{ matrix.arch }}
+        path: _package/android-parts/*
+
+  assemble-android:
+    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') }}
+    name: assemble (${{ matrix.target }})
+    needs: [resolve, build-android]
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [android, android_prefixed, android_prefixed_stripped]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: ${{ needs.resolve.outputs.repo }}
+    - uses: actions/download-artifact@v4
+      with:
+        pattern: android-part-${{ matrix.target }}-*
+        path: parts
+        merge-multiple: true
+    - name: Assemble
+      run: python3 scripts/build.py assemble-android ${{ matrix.target }} --parts-dir parts
+    - uses: actions/upload-artifact@v4
+      with:
+        name: packages-${{ matrix.target }}
+        path: _package/*
+        compression-level: 0
+
+  build-libwebrtc-linux:
+    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') && contains(fromJSON('["all", "libwebrtc"]'), inputs.platforms || 'all') }}
+    name: build (libwebrtc_linux_${{ matrix.arch }})
+    needs: [resolve, sync-linux]
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    runs-on: namespace-profile-webrtc-android
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: ${{ needs.resolve.outputs.repo }}
+    - uses: actions/checkout@v5
+      with:
+        repository: webrtc-sdk/libwebrtc
+        ref: ${{ needs.resolve.outputs.libwebrtc }}
+        path: libwebrtc
+    - name: Install dependencies
+      run: |
+        sudo ./scripts/apt_install_x86_64.sh
+        sudo apt-get install -y openjdk-11-jdk
+    - name: Source cache
+      uses: ./.github/actions/source-cache
+      with:
+        backend: namespace
+        id: linux
+    - name: Build
+      run: |
+        python3 scripts/build.py build libwebrtc_linux_${{ matrix.arch }} --libwebrtc-dir libwebrtc \
+          --sync-for android libwebrtc_linux_x64 \
+          --commit '${{ needs.resolve.outputs.webrtc }}' $CONFIG_ARGS
+    - uses: actions/upload-artifact@v4
+      with:
+        name: packages-libwebrtc-linux-${{ matrix.arch }}
+        path: _package/*
+        compression-level: 0
+
+  build-libwebrtc-windows:
+    if: ${{ !(inputs.dry_run || vars.BUILD_DRY_RUN == 'true') && contains(fromJSON('["all", "libwebrtc"]'), inputs.platforms || 'all') }}
+    name: build (libwebrtc_win_${{ matrix.arch }})
+    needs: resolve
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    runs-on: windows-2022
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: ${{ needs.resolve.outputs.repo }}
+    - uses: actions/checkout@v5
+      with:
+        repository: webrtc-sdk/libwebrtc
+        ref: ${{ needs.resolve.outputs.libwebrtc }}
+        path: libwebrtc
+    - name: Source cache
+      id: cache
+      uses: ./.github/actions/source-cache
+      with:
+        backend: none
+        commit: ${{ needs.resolve.outputs.webrtc }}
+    - name: Build
+      # The D:\ work drive is too small for a webrtc checkout; use C:\.
+      shell: pwsh
+      env:
+        COMMIT: ${{ steps.cache.outputs.commit }}
+        FRESH: ${{ steps.cache.outputs.fresh-arg }}
+        HISTORY: ${{ steps.cache.outputs.history-arg }}
+        CONFIGURATION: ${{ inputs.configuration }}
+      run: |
+        $extra = @('--commit', $env:COMMIT)
+        if ($env:FRESH) { $extra += $env:FRESH }
+        if ($env:HISTORY) { $extra += $env:HISTORY }
+        if ($env:CONFIGURATION -eq 'debug') { $extra += '--debug' }
+        python3 scripts/build.py build libwebrtc_win_${{ matrix.arch }} `
+          --libwebrtc-dir libwebrtc --work-dir 'C:\wb' --sync-for libwebrtc_win_x64 @extra
+    - name: Upload packages
       uses: actions/upload-artifact@v4
       with:
-        name: webrtc.${{ matrix.name }}.tar.gz
-        path: build/_package/${{ matrix.name }}/webrtc.tar.gz
-  create-release:
-    name: Create Release
-    if: github.ref_type == 'tag'
-    needs:
-      - build-apple
-      - build-linux
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - uses: actions/download-artifact@v4
-      with:
-        path: artifacts
-        name: webrtc.android_prefixed.tar.gz
-    - uses: actions/download-artifact@v4
-      with:
-        path: artifacts
-        name: webrtc.android_prefixed_stripped.tar.gz
-    - uses: actions/download-artifact@v4
-      with:
-        path: artifacts
-        name: LiveKitWebRTC.xcframework.zip
-    - uses: actions/download-artifact@v4
-      with:
-        path: artifacts
-        name: LiveKitWebRTC-stripped.xcframework.zip
-    - uses: softprops/action-gh-release@v2
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        files: artifacts/**
-  publish-xcframework:
-    name: Publish
-    if: github.ref_type == 'tag'
-    needs:
-      - create-release
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - uses: actions/download-artifact@v4
-      with:
-        path: artifacts
-        name: LiveKitWebRTC.xcframework.zip
-    - name: Render Package.swift and podspec
-      id: render
-      run: |
-        # Build tags are prefixed with m (m144.7559.13); hosting repo tags are not.
-        VERSION="${GITHUB_REF_NAME#m}"
-        CHECKSUM=$(sha256sum artifacts/LiveKitWebRTC.xcframework.zip | awk '{print $1}')
-        echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-        mkdir -p out
-        for f in Package.swift LiveKitWebRTC.podspec; do
-          sed -e "s|{{VERSION}}|${VERSION}|g" \
-              -e "s|{{CHECKSUM}}|${CHECKSUM}|g" \
-              ".github/templates/$f" > "out/$f"
-        done
-    - uses: livekit/publish-xcframework-action@3b8645334fb62b0fd1d7067067819bcd111db157 # main
-      with:
-        xcframework-zip: artifacts/LiveKitWebRTC.xcframework.zip
-        version: ${{ steps.render.outputs.version }}
-        hosting-repo: livekit/webrtc-xcframework
-        files: |
-          out/Package.swift:Package.swift
-          out/LiveKitWebRTC.podspec:LiveKitWebRTC.podspec
-        token: ${{ secrets.XCFRAMEWORK_PAT }}
+        name: packages-libwebrtc-win-${{ matrix.arch }}
+        path: C:\wb\_package\*
+        compression-level: 0

@@ -1,0 +1,84 @@
+name: webrtc source cache
+description: >
+  Resolve the webrtc commit and, on Namespace runners, mount the source cache
+  shared by the build, unittests and sync workflows.
+
+  - namespace: mounts a Namespace cache volume on ./_source (depot_tools and
+    the whole checkout, without build outputs or test resources). The volume
+    is persisted after every job; build.py leaves it untouched when the commit
+    and target_os match its last sync, and only checks out src when DEPS is
+    unchanged. With `force`, pass `fresh-arg` (--fresh) to build.py to rebuild
+    it from scratch.
+  - none: no cache (GitHub-hosted macOS/Windows: the git mirrors alone exceed
+    the 10GB actions/cache limit, so every job syncs from scratch, shallow:
+    pass `history-arg`).
+
+  Jobs sharing a cache must sync with the same target_os: pass the same
+  targets to build.py (--sync-for).
+
+inputs:
+  backend:
+    description: 'namespace | none'
+    required: true
+  id:
+    description: 'cache family shared across workflows (namespace): linux'
+    required: false
+    default: ''
+  commit:
+    description: 'webrtc commit, branch or tag (default: WEBRTC_COMMIT in VERSION); resolved to a full SHA'
+    required: false
+    default: ''
+  force:
+    description: 'rebuild the cache from scratch'
+    required: false
+    default: 'false'
+
+outputs:
+  commit:
+    description: 'resolved webrtc commit (full SHA)'
+    value: ${{ steps.commit.outputs.sha }}
+  fresh-arg:
+    description: '"--fresh" when force is set on a cached backend, else empty; pass to build.py'
+    value: ${{ inputs.backend == 'namespace' && inputs.force == 'true' && '--fresh' || '' }}
+  history-arg:
+    description: '"--no-history" without a cache (shallow checkout, far less to download), else empty; pass to build.py'
+    value: ${{ inputs.backend != 'namespace' && '--no-history' || '' }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve commit
+      id: commit
+      shell: bash
+      env:
+        COMMIT: ${{ inputs.commit }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        c="${COMMIT:-$(sed -n 's/^WEBRTC_COMMIT=//p' VERSION | tr -d '\r')}"
+        # A moving ref (HEAD, a branch) is resolved here once, so the build
+        # uses exactly this commit. build.yml resolves it once per workflow
+        # (resolve job) and passes the SHA to every job.
+        if ! [[ "$c" =~ ^[0-9a-f]{40}$ ]]; then
+          repo="${WEBRTC_REPO_URL:-https://github.com/webrtc-sdk/webrtc.git}"
+          repo="${repo#https://github.com/}"; repo="${repo%.git}"
+          c=$(gh api "repos/$repo/commits/$c" --jq .sha)
+        fi
+        echo "sha=$c" >> "$GITHUB_OUTPUT"
+
+    - name: Mount source cache volume
+      if: inputs.backend == 'namespace'
+      uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
+      with:
+        path: _source
+
+    - name: Report cache state
+      shell: bash
+      run: |
+        if [ '${{ inputs.backend }}' != namespace ]; then
+          echo "- source cache: none (full sync)" >> "$GITHUB_STEP_SUMMARY"
+        elif [ -f _source/webrtc/.sync_stamp.json ]; then
+          echo "- source cache (${{ inputs.id }}): **hit**, last sync $(cat _source/webrtc/.sync_stamp.json)" >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "- source cache (${{ inputs.id }}): **miss**" >> "$GITHUB_STEP_SUMMARY"
+        fi

@@ -1,0 +1,1305 @@
+#!/usr/bin/env python3
+"""Build webrtc-sdk/webrtc binaries.
+
+One checkout of webrtc-sdk/webrtc (plus its gclient dependencies) is shared by
+every target built on the same host. Targets passed in a single invocation are
+synced once and then built one after another; the tree is reset and re-patched
+between targets only when their patch sets differ.
+
+Usage:
+    python3 scripts/build.py build apple apple_prefixed apple_prefixed_stripped
+    python3 scripts/build.py build android android_prefixed android_prefixed_stripped
+    python3 scripts/build.py build libwebrtc_linux_x64 --libwebrtc-dir ../libwebrtc
+    python3 scripts/build.py build libwebrtc_win_arm64 --work-dir C:\\wb --libwebrtc-dir ..\\libwebrtc
+    python3 scripts/build.py test
+    python3 scripts/build.py sync android libwebrtc_linux_x64   # checkout only
+
+The webrtc commit defaults to WEBRTC_COMMIT in ./VERSION (repository root).
+
+Layout (relative to --work-dir, default: the repository root):
+    _source/depot_tools/        depot_tools checkout
+    _source/webrtc/.gclient     gclient solution (target_os grows as needed)
+    _source/webrtc/src/         webrtc-sdk/webrtc checkout
+    _source/webrtc/src/out -> _out/build        link to the build outputs
+    _out/build/<target>-<config>/               build output (removed after use)
+    _package/                   release files (+ <name>.shasum next to each)
+
+Build outputs are deleted once their files are in _package, and the tree is
+reset (patches undone, generated files removed) when the script exits, so a
+cached _source only ever holds pristine sources. --keep-out keeps them for
+local incremental builds.
+
+Set GIT_CACHE_PATH to share a gclient git cache between runs.
+
+Derived from shiguredo/webrtc-build (Apache-2.0, see NOTICE) and the
+libwebrtc build scripts from webrtc-sdk/libwebrtc.
+"""
+
+import argparse
+import glob
+import hashlib
+import json
+import logging
+import os
+import platform
+import shutil
+import stat
+import subprocess
+import sys
+import tarfile
+import threading
+import time
+import zipfile
+from typing import Dict, List, NamedTuple, Optional
+
+SCRIPT_DIR = os.path.abspath(os.path.dirname(__file__))
+ROOT_DIR = os.path.dirname(SCRIPT_DIR)
+PATCH_DIR = os.path.join(SCRIPT_DIR, 'patches')
+
+# Overridable to build from a fork (e.g. in a test repository).
+WEBRTC_REPO = os.environ.get('WEBRTC_REPO_URL') or 'https://github.com/webrtc-sdk/webrtc.git'
+DEPOT_TOOLS_REPO = 'https://chromium.googlesource.com/chromium/tools/depot_tools.git'
+
+HOST = platform.system()  # 'Darwin' | 'Linux' | 'Windows'
+
+
+# ---------------------------------------------------------------------------
+# Target definitions
+# ---------------------------------------------------------------------------
+
+class Target(NamedTuple):
+    kind: str            # 'apple' | 'android' | 'libwebrtc'
+    host: str            # platform.system() value the target must be built on
+    target_os: List[str]  # gclient target_os entries the target needs
+    patches: List[str]   # patches from scripts/patches, applied with -p1 in src
+    extra_gn_args: List[str] = []
+    package: str = ''    # file name written to the package dir
+    prefix: str = ''     # apple: framework name prefix
+    os: str = ''         # libwebrtc: 'linux' | 'win'
+    cpu: str = ''        # libwebrtc: 'x64' | 'arm64'
+
+
+# Apple targets only need the host default (mac): target_os 'ios' would also
+# check out chromium/src/ios, which the framework builds do not use.
+
+# Software VP9/AV1 removed and optimized for size. H265 stays on Apple: it is
+# VideoToolbox-backed there (no size win) and rtc_use_h265=false does not build
+# the ObjC factories.
+APPLE_STRIPPED_GN_ARGS = [
+    'enable_libaom=false',
+    'rtc_include_dav1d_in_internal_decoder_factory=false',
+    'rtc_libvpx_build_vp9=false',
+    'optimize_for_size=true',
+]
+
+ANDROID_STRIPPED_GN_ARGS = [
+    'enable_libaom=false',
+    'rtc_include_dav1d_in_internal_decoder_factory=false',
+    'rtc_use_h265=false',
+    'rtc_libvpx_build_vp9=false',
+    'optimize_for_size=true',
+]
+
+ANDROID_PATCHES = [
+    'add_license_dav1d.patch',
+    'android_webrtc_version.patch',
+    'fix_mocks.patch',
+]
+
+# Patches live in the libwebrtc checkout (<libwebrtc-dir>/patches) and are
+# tied to the WebRTC milestone; update together with libwebrtc.
+LIBWEBRTC_PATCHES = {
+    'linux': [
+        'custom_audio_source_m150.patch',
+        'add_libwebrtc_build_target.patch',
+        'fix_desktop_capture_compile.patch',
+    ],
+    'win': [
+        'custom_audio_source_m150.patch',
+        'add_libwebrtc_build_target.patch',
+        'allow_176k4_192k_shared_mode_formats.patch',
+    ],
+}
+
+TARGETS: Dict[str, Target] = {
+    'apple': Target(
+        kind='apple', host='Darwin', target_os=['mac'],
+        patches=[],
+        package='WebRTC.xcframework.zip'),
+    'apple_prefixed': Target(
+        kind='apple', host='Darwin', target_os=['mac'],
+        patches=['apple_prefix.patch'], prefix='LiveKit',
+        package='LiveKitWebRTC.xcframework.zip'),
+    # Same module name as apple_prefixed (drop-in), distinct file name.
+    'apple_prefixed_stripped': Target(
+        kind='apple', host='Darwin', target_os=['mac'],
+        patches=['apple_prefix.patch'], prefix='LiveKit',
+        extra_gn_args=APPLE_STRIPPED_GN_ARGS,
+        package='LiveKitWebRTC-stripped.xcframework.zip'),
+    'android': Target(
+        kind='android', host='Linux', target_os=['android'],
+        patches=ANDROID_PATCHES,
+        package='libwebrtc.aar'),
+    'android_prefixed': Target(
+        kind='android', host='Linux', target_os=['android'],
+        patches=[*ANDROID_PATCHES, 'jni_prefix.patch'],
+        package='libwebrtc_prefixed.aar'),
+    'android_prefixed_stripped': Target(
+        kind='android', host='Linux', target_os=['android'],
+        patches=[*ANDROID_PATCHES, 'jni_prefix.patch'],
+        extra_gn_args=ANDROID_STRIPPED_GN_ARGS,
+        package='libwebrtc_prefixed_stripped.aar'),
+}
+for _cpu in ('x64', 'arm64'):
+    TARGETS[f'libwebrtc_linux_{_cpu}'] = Target(
+        kind='libwebrtc', host='Linux', target_os=['linux'],
+        patches=[], os='linux', cpu=_cpu)
+    TARGETS[f'libwebrtc_win_{_cpu}'] = Target(
+        kind='libwebrtc', host='Windows', target_os=['win'],
+        patches=[], os='win', cpu=_cpu)
+
+# Shared by the android and unit test builds.
+COMMON_GN_ARGS = [
+    'rtc_use_h264=false',
+    'is_component_build=false',
+    'rtc_build_examples=false',
+    'use_rtti=true',
+    'rtc_build_tools=false',
+    'rtc_enable_protobuf=false',
+]
+
+ANDROID_ARCHS = ['armeabi-v7a', 'arm64-v8a', 'x86_64', 'x86']
+
+TEST_PATCHES = [
+    'add_license_dav1d.patch',
+    'fix_mocks.patch',
+    'fix_build_for_validate_test_registration.patch',
+]
+
+TEST_GN_ARGS = {
+    'Linux': [
+        'target_os="linux"',
+        'rtc_use_pipewire=false',
+    ],
+    'Darwin': [
+        'target_os="mac"',
+        'target_cpu="arm64"',
+        'enable_stripping=true',
+        'enable_dsyms=true',
+        'rtc_libvpx_build_vp9=true',
+        'rtc_enable_symbol_export=true',
+        'rtc_enable_objc_symbol_export=false',
+        # The clang module build of libc++ needs the include config that
+        # use_custom_libcxx=false removes ("unknown type name 'size_t'").
+        'use_custom_libcxx=true',
+        'treat_warnings_as_errors=false',
+        'clang_use_chrome_plugins=false',
+        'use_lld=false',
+    ],
+    'Windows': [
+        'target_os="win"',
+        'target_cpu="x64"',
+        'is_clang=true',
+        'symbol_level=1',
+    ],
+}
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+# Long-running command currently executing, reported by the heartbeat.
+_current = {'cmd': None, 'start': 0.0}
+
+HEARTBEAT_SECONDS = 120
+
+
+def _heartbeat():
+    while True:
+        time.sleep(HEARTBEAT_SECONDS)
+        cmd, start = _current['cmd'], _current['start']
+        if cmd:
+            logging.info('[heartbeat] %dm%02ds in: %s', *divmod(int(time.time() - start), 60), cmd)
+
+
+def run(args: List[str], cwd: Optional[str] = None, check: bool = True,
+        capture: bool = False) -> subprocess.CompletedProcess:
+    exe = shutil.which(args[0]) or args[0]
+    cmd = ' '.join(args)
+    logging.info('+ %s%s', cmd, f'  (cwd={cwd})' if cwd else '')
+    _current.update(cmd=cmd, start=time.time())
+    try:
+        return subprocess.run(
+            [exe, *args[1:]], cwd=cwd, check=check,
+            stdout=subprocess.PIPE if capture else None,
+            encoding='utf-8' if capture else None)
+    finally:
+        _current['cmd'] = None
+
+
+def capture(args: List[str], cwd: Optional[str] = None) -> str:
+    return run(args, cwd=cwd, capture=True).stdout.strip()
+
+
+def _on_rm_error(func, path, _exc_info):
+    # git objects are read-only on Windows.
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
+def is_link(path: str) -> bool:
+    """Symlink, or directory junction on Windows."""
+    isjunction = getattr(os.path, 'isjunction', None)  # Python 3.12+
+    return os.path.islink(path) or bool(isjunction and isjunction(path))
+
+
+def rm_rf(path: str):
+    if is_link(path):
+        # Remove the link only, never what it points to.
+        if os.path.isdir(path) and HOST == 'Windows':
+            os.rmdir(path)
+        else:
+            os.unlink(path)
+    elif os.path.isfile(path):
+        os.remove(path)
+    elif os.path.isdir(path):
+        shutil.rmtree(path, onerror=_on_rm_error)
+
+
+def link_dir(link: str, target: str):
+    """Point `link` at directory `target` (a junction on Windows, which
+    needs no symlink privilege)."""
+    if os.path.realpath(link) == os.path.realpath(target):
+        return  # already that directory (or a link to it)
+    rm_rf(link)
+    if HOST == 'Windows':
+        subprocess.run(['cmd', '/c', 'mklink', '/J', link, target],
+                       check=True, stdout=subprocess.DEVNULL)
+    else:
+        os.symlink(target, link, target_is_directory=True)
+
+
+def mkdir_p(path: str):
+    os.makedirs(path, exist_ok=True)
+
+
+def read_version_file(path: str) -> Dict[str, str]:
+    result = {}
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            key, value = line.split('=', 1)
+            result[key.strip()] = value.strip().strip('"')
+    return result
+
+
+def add_path(path: str):
+    os.environ['PATH'] = path + os.pathsep + os.environ.get('PATH', '')
+
+
+def write_checksums(path: str):
+    """Write <path>.shasum, same as `shasum -a 256 <name> > <name>.shasum`."""
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            h.update(chunk)
+    with open(f'{path}.shasum', 'w', newline='\n') as f:
+        f.write(f'{h.hexdigest()}  {os.path.basename(path)}\n')
+    logging.info('sha256 %s: %s', os.path.basename(path), h.hexdigest())
+
+
+def zip_dir(src_dir: str, zip_path: str):
+    """Zip src_dir, keeping its basename as the top-level directory."""
+    rm_rf(zip_path)
+    base = os.path.dirname(src_dir)
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for root, _, files in os.walk(src_dir):
+            for name in files:
+                full = os.path.join(root, name)
+                zf.write(full, os.path.relpath(full, base))
+
+
+def gn_args_str(args: List[str]) -> str:
+    return ' '.join(args)
+
+
+# ---------------------------------------------------------------------------
+# Source checkout
+# ---------------------------------------------------------------------------
+
+class Context:
+    def __init__(self, args):
+        self.work_dir = os.path.abspath(args.work_dir)
+        self.source_dir = os.path.join(self.work_dir, '_source')
+        self.gclient_dir = os.path.join(self.source_dir, 'webrtc')
+        self.src_dir = os.path.join(self.gclient_dir, 'src')
+        self.depot_tools_dir = os.path.join(self.source_dir, 'depot_tools')
+        # Build outputs live outside _source (which may be a cache volume);
+        # src/out links here. Not on Windows: siso cannot resolve paths through
+        # a directory junction, and Windows jobs have no source cache anyway.
+        self.link_out = HOST != 'Windows'
+        self.out_root = (os.path.join(self.work_dir, '_out', 'build') if self.link_out
+                         else os.path.join(self.src_dir, 'out'))
+        self.package_dir = os.path.abspath(
+            args.package_dir or os.path.join(self.work_dir, '_package'))
+        # Unit tests always build debug.
+        self.debug = getattr(args, 'debug', False) or args.op == 'test'
+        self.config = 'debug' if self.debug else 'release'
+        self.jobs = args.jobs
+        self.no_history = getattr(args, 'no_history', False)
+        self.apple_slices = getattr(args, 'apple_slices', None) or []
+        self.android_archs = getattr(args, 'android_archs', None) or []
+        self.libwebrtc_dir = os.path.abspath(
+            args.libwebrtc_dir) if getattr(args, 'libwebrtc_dir', None) else None
+
+        self.version = read_version_file(os.path.join(ROOT_DIR, 'VERSION'))
+        self.commit = args.commit or self.version['WEBRTC_COMMIT']
+        # Patch set currently applied to the tree; None means unknown/dirty.
+        self.applied: Optional[tuple] = None
+
+    def out_dir(self, name: str) -> str:
+        # Under src/out (gitignored), which links to out_root. build_aar.py
+        # requires the build dir to be under the realpath of src, so start
+        # from it (_source can itself be a symlink to a cache volume).
+        return os.path.join(os.path.realpath(self.src_dir), 'out', f'{name}-{self.config}')
+
+
+def setup_environment(ctx: Context):
+    if not os.path.isdir(ctx.depot_tools_dir):
+        mkdir_p(ctx.source_dir)
+        run(['git', 'clone', '--depth', '1', DEPOT_TOOLS_REPO, ctx.depot_tools_dir])
+    add_path(ctx.depot_tools_dir)
+    if HOST == 'Windows':
+        os.environ['DEPOT_TOOLS_WIN_TOOLCHAIN'] = '0'
+        os.environ['GYP_MSVS_VERSION'] = '2022'
+        os.environ['PYTHONIOENCODING'] = 'utf-8'
+
+
+def read_gclient_target_os(path: str) -> List[str]:
+    if not os.path.exists(path):
+        return []
+    scope: Dict = {}
+    with open(path) as f:
+        exec(f.read(), {}, scope)  # .gclient is a Python file we wrote.
+    return list(scope.get('target_os', []))
+
+
+def merged_target_os(ctx: Context, target_os: List[str]) -> List[str]:
+    # Only grow target_os: removing an OS would make `gclient sync -D` delete
+    # its dependencies from a cached checkout.
+    path = os.path.join(ctx.gclient_dir, '.gclient')
+    return sorted(set(read_gclient_target_os(path)) | set(target_os))
+
+
+def write_gclient(ctx: Context, merged: List[str]):
+    path = os.path.join(ctx.gclient_dir, '.gclient')
+    content = (
+        'solutions = [\n'
+        '  {\n'
+        '    "name": "src",\n'
+        f'    "url": "{WEBRTC_REPO}",\n'
+        '    "deps_file": "DEPS",\n'
+        '    "managed": False,\n'
+        '    "custom_deps": {},\n'
+        '  },\n'
+        ']\n'
+        f'target_os = {merged!r}\n'
+    )
+    with open(path, 'w', newline='\n') as f:
+        f.write(content)
+    logging.info('.gclient target_os = %s', merged)
+
+
+def stamp_path(ctx: Context) -> str:
+    return os.path.join(ctx.gclient_dir, '.sync_stamp.json')
+
+
+def read_stamp(ctx: Context) -> Dict:
+    try:
+        with open(stamp_path(ctx)) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def is_full_sha(ref: str) -> bool:
+    return len(ref) == 40 and all(c in '0123456789abcdef' for c in ref.lower())
+
+
+def run_hooks(ctx: Context):
+    """gclient runhooks without downloading the unit test resources.
+
+    The resources hook (several GB of raw audio/video, ~4 minutes) only
+    matters for unit tests, which fetch them via fetch_test_resources(). It is
+    an unnamed DEPS hook, so custom_hooks cannot disable it; hiding
+    src/resources makes it find no .sha1 files and return immediately.
+    """
+    resources = os.path.join(ctx.src_dir, 'resources')
+    hidden = os.path.join(ctx.src_dir, '.resources.hidden')
+    rm_rf(hidden)
+    moved = os.path.isdir(resources)
+    if moved:
+        os.rename(resources, hidden)
+    try:
+        run(['gclient', 'runhooks'], cwd=ctx.gclient_dir)
+    finally:
+        if moved:
+            rm_rf(resources)
+            os.rename(hidden, resources)
+
+
+def deepen_to_change_id(repo: str):
+    """Fetch history in a shallow checkout until it has a Change-Id commit.
+
+    The lastchange hook (build/util/lastchange.py) derives LASTCHANGE, and
+    from it the Windows linker /TIMESTAMP, from the newest commit with a
+    Change-Id in src/build. src/build is the webrtc-sdk/build fork, whose own
+    commits on top of Chromium have none, so a depth-1 checkout (gclient
+    --no-history) yields no commit time and lld-link fails with "invalid
+    timestamp".
+    """
+    head = capture(['git', 'rev-parse', 'HEAD'], cwd=repo)
+    for depth in (50, 200, 1000):
+        if capture(['git', 'log', '-1', '--format=%H', '--grep=^Change-Id:', 'HEAD'], cwd=repo):
+            return
+        if capture(['git', 'rev-parse', '--is-shallow-repository'], cwd=repo) != 'true':
+            break
+        run(['git', 'fetch', '-q', f'--depth={depth}', 'origin', head], cwd=repo)
+    if (not capture(['git', 'log', '-1', '--format=%H', '--grep=^Change-Id:', 'HEAD'], cwd=repo)
+            and capture(['git', 'rev-parse', '--is-shallow-repository'], cwd=repo) == 'true'):
+        run(['git', 'fetch', '-q', '--unshallow', 'origin', head], cwd=repo)
+
+
+def sync(ctx: Context, target_os: List[str]) -> bool:
+    """Check out ctx.commit with its dependencies.
+
+    Returns False when the checkout already matches (same commit and
+    target_os as the last successful sync) and nothing was changed, so a
+    persisted source cache is only updated when the commit changes.
+    """
+    mkdir_p(ctx.gclient_dir)
+    if HOST == 'Windows':
+        run(['git', 'config', '--global', 'core.longpaths', 'true'])
+    merged = merged_target_os(ctx, target_os)
+    src = ctx.src_dir
+    stamp = read_stamp(ctx)
+    have_src = os.path.isdir(os.path.join(src, '.git'))
+
+    def up_to_date(sha: str) -> bool:
+        return (have_src and stamp.get('commit') == sha
+                and stamp.get('target_os') == merged)
+
+    # Full SHA: decide without touching the network.
+    if is_full_sha(ctx.commit) and up_to_date(ctx.commit.lower()):
+        logging.info('checkout already synced at %s %s; skipping sync', ctx.commit, merged)
+        # A previous build may have left patches applied.
+        ctx.applied = None
+        return False
+
+    # src is always a full clone: webrtc alone is small; the dependencies are
+    # what --no-history saves.
+    if not have_src:
+        rm_rf(src)
+        run(['git', 'clone', WEBRTC_REPO, src])
+    elif capture(['git', 'remote', 'get-url', 'origin'], cwd=src) != WEBRTC_REPO:
+        # A cached checkout from another fork; commits are shared, so keep it.
+        run(['git', 'remote', 'set-url', 'origin', WEBRTC_REPO], cwd=src)
+
+    run(['git', 'fetch', 'origin'], cwd=src)
+    if ctx.commit == 'HEAD':
+        run(['git', 'remote', 'set-head', 'origin', '-a'], cwd=src)
+        ref = 'origin/HEAD'
+    else:
+        ref = ctx.commit
+        exists = run(['git', 'cat-file', '-e', f'{ref}^{{commit}}'],
+                     cwd=src, check=False).returncode == 0
+        if not exists:
+            # Commits not reachable from a branch (e.g. PR heads).
+            run(['git', 'fetch', 'origin', ref], cwd=src)
+    sha = capture(['git', 'rev-parse', f'{ref}^{{commit}}'], cwd=src)
+    if up_to_date(sha):
+        logging.info('checkout already synced at %s %s; skipping sync', sha, merged)
+        ctx.applied = None
+        return False
+
+    # Fast path: dependency revisions are pinned in DEPS, so when DEPS (and
+    # target_os) did not change since the last complete sync, the deps are
+    # already right and only src needs the new commit. Hooks still run:
+    # lastchange and landmines depend on the src revision; the download hooks
+    # are no-ops when their files are current.
+    old = stamp.get('commit')
+    deps_unchanged = (
+        have_src and old and stamp.get('target_os') == merged
+        and run(['git', 'cat-file', '-e', f'{old}^{{commit}}'],
+                cwd=src, check=False).returncode == 0
+        and run(['git', 'diff', '--quiet', old, sha, '--', 'DEPS'],
+                cwd=src, check=False).returncode == 0)
+
+    # Invalidate first so an interrupted sync is never taken as complete.
+    rm_rf(stamp_path(ctx))
+    write_gclient(ctx, merged)
+    run(['git', 'checkout', '-f', sha], cwd=src)
+    run(['git', 'clean', '-df'], cwd=src)
+    if deps_unchanged:
+        logging.info('DEPS unchanged since %s; fast sync (src checkout + runhooks)', old)
+        run_hooks(ctx)
+        # gclient did not reset the dependency repos; reset_tree() undoes any
+        # patches a killed job may have left in third_party.
+        ctx.applied = None
+    else:
+        history = ['--no-history'] if ctx.no_history else ['--with_branch_heads']
+        run(['gclient', 'sync', '-D', '--force', '--reset', '--nohooks',
+             *history, '--jobs=8'], cwd=ctx.gclient_dir)
+        if ctx.no_history:
+            deepen_to_change_id(os.path.join(src, 'build'))
+        run_hooks(ctx)
+        ctx.applied = ()
+    with open(stamp_path(ctx), 'w') as f:
+        json.dump({'commit': sha, 'target_os': merged}, f)
+    logging.info('webrtc synced at %s', sha)
+    return True
+
+
+def reset_tree(ctx: Context):
+    """Undo patches and generated files from a previous target."""
+    run(['git', 'reset', '--hard', '--quiet'], cwd=ctx.src_dir)
+    # jni_prefix.patch touches third_party/jni_zero (separate repo). Do not
+    # `git clean` there: dependency checkouts live under it.
+    third_party = os.path.join(ctx.src_dir, 'third_party')
+    if os.path.isdir(os.path.join(third_party, '.git')):
+        run(['git', 'reset', '--hard', '--quiet'], cwd=third_party)
+    rm_rf(os.path.join(ctx.src_dir, 'libwebrtc'))
+    rm_rf(android_version_java_path(ctx))
+    ctx.applied = ()
+
+
+def apply_patches(ctx: Context, patches: List[str], key: tuple):
+    """Bring the tree to the given patch set, resetting only when needed."""
+    if ctx.applied == key:
+        return
+    if ctx.applied != ():
+        reset_tree(ctx)
+    for patch in patches:
+        path = os.path.join(PATCH_DIR, patch)
+        if HOST == 'Windows':
+            run(['git', 'apply', '-p1', '--ignore-space-change',
+                 '--ignore-whitespace', '--whitespace=nowarn', path], cwd=ctx.src_dir)
+        else:
+            with open(path) as stdin:
+                logging.info('+ patch -p1 < %s', path)
+                subprocess.run(['patch', '-p1'], stdin=stdin, cwd=ctx.src_dir, check=True)
+    ctx.applied = key
+
+
+def gn_gen(ctx: Context, out_dir: str, args: List[str]):
+    run(['gn', 'gen', out_dir, '--args=' + gn_args_str(args)], cwd=ctx.src_dir)
+
+
+def ninja(ctx: Context, out_dir: str, targets: List[str]):
+    jobs = ['-j', str(ctx.jobs)] if ctx.jobs else []
+    run(['autoninja', '-C', out_dir, *jobs, *targets], cwd=ctx.src_dir)
+
+
+def publish(ctx: Context, path: str, name: str) -> str:
+    mkdir_p(ctx.package_dir)
+    dst = os.path.join(ctx.package_dir, name)
+    rm_rf(dst)
+    shutil.copy2(path, dst)
+    write_checksums(dst)
+    return dst
+
+
+# ---------------------------------------------------------------------------
+# Apple: xcframework for iOS / macOS / Catalyst / tvOS / visionOS
+# ---------------------------------------------------------------------------
+
+APPLE_PLATFORMS = [
+    ('iOS-arm64-device', ['target_os="ios"', 'target_environment="device"',
+                          'target_cpu="arm64"', 'ios_deployment_target="13.0"']),
+    ('iOS-arm64-simulator', ['target_os="ios"', 'target_environment="simulator"',
+                             'target_cpu="arm64"', 'ios_deployment_target="13.0"']),
+    ('iOS-x64-simulator', ['target_os="ios"', 'target_environment="simulator"',
+                           'target_cpu="x64"', 'ios_deployment_target="13.0"']),
+    ('macOS-arm64', ['target_os="mac"', 'target_cpu="arm64"',
+                     'mac_deployment_target="10.15"']),
+    ('macOS-x64', ['target_os="mac"', 'target_cpu="x64"',
+                   'mac_deployment_target="10.15"']),
+    ('catalyst-arm64', ['target_os="ios"', 'target_environment="catalyst"',
+                        'target_cpu="arm64"', 'ios_deployment_target="14.0"']),
+    ('catalyst-x64', ['target_os="ios"', 'target_environment="catalyst"',
+                      'target_cpu="x64"', 'ios_deployment_target="14.0"']),
+    ('tvOS-arm64-device', ['target_os="ios"', 'target_environment="appletv"',
+                           'target_cpu="arm64"', 'ios_deployment_target="17.0"']),
+    ('tvOS-arm64-simulator', ['target_os="ios"', 'target_environment="appletvsimulator"',
+                              'target_cpu="arm64"', 'ios_deployment_target="17.0"']),
+    ('xrOS-arm64-device', ['target_os="ios"', 'target_environment="xrdevice"',
+                           'target_cpu="arm64"', 'ios_deployment_target="26.0"']),
+    ('xrOS-arm64-simulator', ['target_os="ios"', 'target_environment="xrsimulator"',
+                              'target_cpu="arm64"', 'ios_deployment_target="26.0"']),
+]
+
+# (merged dir, slice whose bundle is copied, slices whose binaries are lipo'd)
+APPLE_UNIVERSAL = [
+    ('macOS-lib', 'macOS-x64', ['macOS-arm64', 'macOS-x64']),
+    ('catalyst-lib', 'catalyst-arm64', ['catalyst-arm64', 'catalyst-x64']),
+    ('iOS-device-lib', 'iOS-arm64-device', ['iOS-arm64-device']),
+    ('iOS-simulator-lib', 'iOS-arm64-simulator', ['iOS-arm64-simulator', 'iOS-x64-simulator']),
+]
+
+APPLE_XCFRAMEWORK_SLICES = [
+    'iOS-device-lib',
+    'iOS-simulator-lib',
+    'macOS-lib',
+    'catalyst-lib',
+    'tvOS-arm64-device',
+    'tvOS-arm64-simulator',
+    'xrOS-arm64-device',
+    'xrOS-arm64-simulator',
+]
+
+
+def apple_common_gn_args(debug: bool) -> List[str]:
+    d = 'true' if debug else 'false'
+    return [
+        'enable_dsyms=true',
+        'enable_libaom=true',
+        'enable_stripping=true',
+        'ios_enable_code_signing=false',
+        'is_component_build=false',
+        f'is_debug={d}',
+        'rtc_build_examples=false',
+        'rtc_enable_protobuf=false',
+        'rtc_enable_symbol_export=true',
+        'rtc_include_dav1d_in_internal_decoder_factory=true',
+        'rtc_include_tests=false',
+        'rtc_libvpx_build_vp9=true',
+        'rtc_use_h264=false',
+        f'strip_absolute_paths_from_debug_symbols={"false" if debug else "true"}',
+        'treat_warnings_as_errors=true',
+        'use_rtti=true',
+    ]
+
+
+APPLE_SLICES = [name for name, _ in APPLE_PLATFORMS]
+
+
+def apple_slice_archive(package_dir: str, name: str, slice_name: str) -> str:
+    return os.path.join(package_dir, 'apple-slices', f'{name}-{slice_name}.tar')
+
+
+def build_apple(ctx: Context, name: str, t: Target):
+    """Build the xcframework, or with --apple-slices only those slices.
+
+    CI builds every slice in its own job (each producing a tar under
+    _package/apple-slices) and then runs `assemble-apple` per target.
+    """
+    apply_patches(ctx, t.patches, tuple(t.patches))
+    fw = f'{t.prefix}WebRTC'
+    out = ctx.out_dir(name)
+    slices = ctx.apple_slices or APPLE_SLICES
+
+    for platform_name, platform_args in APPLE_PLATFORMS:
+        if platform_name not in slices:
+            continue
+        print(f'::group::{name}: {platform_name}', flush=True)
+        slice_dir = os.path.join(out, platform_name)
+        # Target-specific args last: GN keeps the last assignment.
+        gn_gen(ctx, slice_dir, [*apple_common_gn_args(ctx.debug), *platform_args,
+                                *t.extra_gn_args])
+        bundle = 'mac_framework_bundle' if 'macOS' in platform_name else 'ios_framework_bundle'
+        ninja(ctx, slice_dir, [bundle])
+        print('::endgroup::', flush=True)
+
+    license_path = os.path.join(ctx.src_dir, 'LICENSE')
+    if not ctx.apple_slices:
+        assemble_apple(ctx, name, t, out, license_path)
+        return
+
+    # One tar per slice: keeps the framework symlinks, which artifact zips drop.
+    for slice_name in slices:
+        archive = apple_slice_archive(ctx.package_dir, name, slice_name)
+        mkdir_p(os.path.dirname(archive))
+        rm_rf(archive)
+        with tarfile.open(archive, 'w') as tar:
+            tar.add(license_path, arcname='LICENSE')
+            for bundle in (f'{fw}.framework', f'{fw}.dSYM'):
+                path = os.path.join(out, slice_name, bundle)
+                if not os.path.exists(path):
+                    raise RuntimeError(f'missing {path}')
+                tar.add(path, arcname=f'{slice_name}/{bundle}')
+        logging.info('slice archive: %s', archive)
+
+
+def assemble_apple_from_slices(ctx: Context, name: str, t: Target, slices_dir: str):
+    """Unpack the per-slice tars of `name` and build its xcframework zip."""
+    out = os.path.join(ctx.work_dir, '_out', 'assemble', name)
+    rm_rf(out)
+    mkdir_p(out)
+    for slice_name in APPLE_SLICES:
+        archive = apple_slice_archive(slices_dir, name, slice_name)
+        if not os.path.exists(archive):
+            # download-artifact may flatten the apple-slices/ directory.
+            archive = os.path.join(slices_dir, os.path.basename(archive))
+        if not os.path.exists(archive):
+            raise RuntimeError(f'missing slice archive for {name} {slice_name} in {slices_dir}')
+        with tarfile.open(archive) as tar:
+            tar.extractall(out)
+    assemble_apple(ctx, name, t, out, os.path.join(out, 'LICENSE'))
+
+
+def assemble_apple(ctx: Context, name: str, t: Target, out: str, license_path: str):
+    """lipo the slices in `out` into universal binaries, then create, fix up
+    and zip the xcframework."""
+    fw = f'{t.prefix}WebRTC'
+
+    # Universal binaries.
+    for lib, base, slices in APPLE_UNIVERSAL:
+        lib_dir = os.path.join(out, lib)
+        rm_rf(lib_dir)
+        mkdir_p(lib_dir)
+        shutil.copytree(os.path.join(out, base, f'{fw}.framework'),
+                        os.path.join(lib_dir, f'{fw}.framework'), symlinks=True)
+        run(['lipo', '-create', '-output', os.path.join(lib_dir, f'{fw}.framework', fw),
+             *[os.path.join(out, s, f'{fw}.framework', fw) for s in slices]])
+        if os.path.isdir(os.path.join(out, base, f'{fw}.dSYM')):
+            shutil.copytree(os.path.join(out, base, f'{fw}.dSYM'),
+                            os.path.join(lib_dir, f'{fw}.dSYM'), symlinks=True)
+            dwarf = os.path.join('Contents', 'Resources', 'DWARF', fw)
+            run(['lipo', '-create', '-output', os.path.join(lib_dir, f'{fw}.dSYM', dwarf),
+                 *[os.path.join(out, s, f'{fw}.dSYM', dwarf) for s in slices]])
+
+    # XCFramework with debug symbols.
+    xcframework = os.path.join(out, f'{fw}.xcframework')
+    rm_rf(xcframework)
+    xc_args = ['xcodebuild', '-create-xcframework']
+    for s in APPLE_XCFRAMEWORK_SLICES:
+        slice_dir = os.path.join(out, s)
+        xc_args += ['-framework', os.path.join(slice_dir, f'{fw}.framework')]
+        # Xcode names dSYM bundles <Framework>.framework.dSYM; Chromium emits <Framework>.dSYM.
+        dsym = os.path.join(slice_dir, f'{fw}.framework.dSYM')
+        chromium_dsym = os.path.join(slice_dir, f'{fw}.dSYM')
+        if os.path.isdir(chromium_dsym):
+            rm_rf(dsym)
+            os.rename(chromium_dsym, dsym)
+        if not os.path.isdir(dsym):
+            raise RuntimeError(f'missing dSYM {chromium_dsym}')
+        xc_args += ['-debug-symbols', dsym]
+    run([*xc_args, '-output', xcframework])
+
+    shutil.copy2(license_path, xcframework)
+
+    # macOS and Catalyst frameworks must use the versioned bundle layout.
+    for slice_id in ('macos-arm64_x86_64', 'ios-arm64_x86_64-maccatalyst'):
+        fw_dir = os.path.join(xcframework, slice_id, f'{fw}.framework')
+        os.replace(os.path.join(fw_dir, fw), os.path.join(fw_dir, 'Versions', 'A', fw))
+        os.symlink(os.path.join('Versions', 'Current', fw), os.path.join(fw_dir, fw))
+
+    zip_path = os.path.join(out, f'{fw}.xcframework.zip')
+    rm_rf(zip_path)
+    # zip(1) keeps the symlinks the versioned bundles rely on.
+    run(['zip', '--symlinks', '-9', '-r', '-q', zip_path, f'{fw}.xcframework'], cwd=out)
+    publish(ctx, zip_path, t.package)
+
+
+# ---------------------------------------------------------------------------
+# Android: libwebrtc.aar
+# ---------------------------------------------------------------------------
+
+def android_version_java_path(ctx: Context) -> str:
+    return os.path.join(ctx.src_dir, 'sdk', 'android', 'api', 'org', 'webrtc',
+                        'WebrtcBuildVersion.java')
+
+
+def write_android_version_java(ctx: Context):
+    # Compiled in through android_webrtc_version.patch.
+    parts = ctx.version['WEBRTC_BUILD_VERSION'].split('.')
+    branch = f'M{parts[0]}' if len(parts) >= 3 else ''
+    commit = parts[2] if len(parts) >= 3 else ''
+    maint = parts[3] if len(parts) >= 4 else ''
+    revision = capture(['git', 'rev-parse', 'HEAD'], cwd=ctx.src_dir)
+    lines = [
+        'package org.webrtc;',
+        'public interface WebrtcBuildVersion {',
+        f'    public static final String webrtc_branch = "{branch}";',
+        f'    public static final String webrtc_commit = "{commit}";',
+        f'    public static final String webrtc_revision = "{revision}";',
+        f'    public static final String maint_version = "{maint}";',
+        '}',
+    ]
+    with open(android_version_java_path(ctx), 'w', newline='\n') as f:
+        f.write('\n'.join(lines) + '\n')
+
+
+def build_android(ctx: Context, name: str, t: Target):
+    apply_patches(ctx, t.patches, tuple(t.patches))
+    write_android_version_java(ctx)
+    d = 'true' if ctx.debug else 'false'
+    gn_args = [
+        f'is_debug={d}',
+        f'is_java_debug={d}',
+        'treat_warnings_as_errors=false',
+        *COMMON_GN_ARGS,
+        *t.extra_gn_args,
+    ]
+    out = ctx.out_dir(name)
+    mkdir_p(out)
+    archs = ctx.android_archs or ANDROID_ARCHS
+    aar = os.path.join(out, 'libwebrtc.aar')
+    cmd = [sys.executable, os.path.join('tools_webrtc', 'android', 'build_aar.py'),
+           '--build-dir', out,
+           '--output', aar,
+           '--arch', *archs,
+           '--extra-gn-args', gn_args_str(gn_args)]
+    if ctx.jobs:
+        # '=' form: argparse would read a bare '-j8' as an option.
+        cmd += [f'--extra-ninja-switches=-j{ctx.jobs}']
+    run(cmd, cwd=ctx.src_dir)
+    if not ctx.android_archs:
+        publish(ctx, aar, t.package)
+        return
+    # A partial aar for assemble-android (CI builds each arch in its own job).
+    part = android_part_path(ctx.package_dir, name, archs)
+    mkdir_p(os.path.dirname(part))
+    shutil.copy2(aar, part)
+    logging.info('partial aar: %s', part)
+
+
+def android_part_path(package_dir: str, name: str, archs: List[str]) -> str:
+    return os.path.join(package_dir, 'android-parts', f'{name}-{"+".join(archs)}.aar')
+
+
+def assemble_android(ctx: Context, name: str, t: Target, parts_dir: str):
+    """Merge per-arch aars of `name` into one aar.
+
+    An aar is AndroidManifest.xml + classes.jar (arch independent) plus
+    jni/<arch>/*.so; build_aar.py takes the common files from the first arch,
+    so do the same.
+    """
+    parts = sorted(glob.glob(os.path.join(parts_dir, '**', f'{name}-*.aar'), recursive=True))
+    by_arch: Dict[str, str] = {}
+    for part in parts:
+        for arch in os.path.basename(part)[len(name) + 1:-len('.aar')].split('+'):
+            if arch in by_arch:
+                raise RuntimeError(f'{arch} is in both {by_arch[arch]} and {part}')
+            by_arch[arch] = part
+    missing = [a for a in ANDROID_ARCHS if a not in by_arch]
+    if missing:
+        raise RuntimeError(f'{name}: no partial aar for {", ".join(missing)} in {parts_dir}')
+
+    out = os.path.join(ctx.work_dir, '_out', 'assemble', f'{name}.aar')
+    mkdir_p(os.path.dirname(out))
+    rm_rf(out)
+    with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as dst:
+        with zipfile.ZipFile(by_arch[ANDROID_ARCHS[0]]) as base:
+            for item in base.infolist():
+                if not item.filename.startswith('jni/'):
+                    dst.writestr(item, base.read(item))
+        for arch in ANDROID_ARCHS:
+            with zipfile.ZipFile(by_arch[arch]) as src:
+                entries = [i for i in src.infolist() if i.filename.startswith(f'jni/{arch}/')]
+                if not entries:
+                    raise RuntimeError(f'{by_arch[arch]} has no jni/{arch}/')
+                for item in entries:
+                    dst.writestr(item, src.read(item))
+    publish(ctx, out, t.package)
+
+
+# ---------------------------------------------------------------------------
+# libwebrtc: portable C++ wrapper for Linux / Windows
+# ---------------------------------------------------------------------------
+
+LIBWEBRTC_ITEMS = ['include', 'src', 'patches', 'test', 'BUILD.gn', 'LICENSE']
+
+
+def build_libwebrtc(ctx: Context, name: str, t: Target):
+    if not ctx.libwebrtc_dir or not os.path.isfile(
+            os.path.join(ctx.libwebrtc_dir, 'BUILD.gn')):
+        raise RuntimeError('--libwebrtc-dir must point to a webrtc-sdk/libwebrtc checkout')
+
+    patches = LIBWEBRTC_PATCHES[t.os]
+    key = ('libwebrtc', ctx.libwebrtc_dir, *patches)
+    if ctx.applied != key:
+        if ctx.applied != ():
+            reset_tree(ctx)
+        dst = os.path.join(ctx.src_dir, 'libwebrtc')
+        mkdir_p(dst)
+        for item in LIBWEBRTC_ITEMS:
+            src = os.path.join(ctx.libwebrtc_dir, item)
+            if os.path.isdir(src):
+                shutil.copytree(src, os.path.join(dst, item))
+            else:
+                shutil.copy2(src, dst)
+        for patch in patches:
+            run(['git', 'apply', '-v', '--ignore-space-change', '--ignore-whitespace',
+                 '--whitespace=nowarn', os.path.join(ctx.libwebrtc_dir, 'patches', patch)],
+                cwd=ctx.src_dir)
+        ctx.applied = key
+
+    d = 'true' if ctx.debug else 'false'
+    common = [
+        f'is_debug={d}',
+        f'target_cpu="{t.cpu}"',
+        'rtc_enable_protobuf=false',
+        'rtc_include_tests=true',
+        'rtc_build_tools=false',
+        'rtc_build_examples=false',
+        'rtc_libvpx_build_vp9=true',
+        'enable_libaom=true',
+        'is_component_build=false',
+        'ffmpeg_branding="Chrome"',
+        'rtc_use_h264=true',
+        'rtc_use_h265=true',
+        'symbol_level=0',
+        'enable_iterator_debugging=false',
+    ]
+    if t.os == 'linux':
+        run([sys.executable, os.path.join('build', 'linux', 'sysroot_scripts',
+                                          'install-sysroot.py'), f'--arch={t.cpu}'],
+            cwd=ctx.src_dir)
+        # use_clang_modules=false avoids C++ module compile failures that leave
+        # the build incomplete.
+        gn_args = [*common,
+                   'target_os="linux"',
+                   'treat_warnings_as_errors=false',
+                   'use_llvm_libatomic=false',
+                   'use_custom_libcxx=true',
+                   'use_custom_libcxx_for_host=true',
+                   'use_clang_modules=false',
+                   'enable_stripping=true',
+                   'rtc_use_pipewire=true',
+                   'use_rtti=true',
+                   'rtc_use_x11=true']
+    else:
+        gn_args = [*common,
+                   'is_clang=true',
+                   'use_custom_libcxx=false']
+
+    out = ctx.out_dir(name)
+    gn_gen(ctx, out, gn_args)
+    ninja(ctx, out, ['libwebrtc', 'libwebrtc_cpp_api_unittests'])
+
+    # Directory names inside the zips are kept from the old libwebrtc releases.
+    if t.os == 'linux':
+        stage_name = f'linux-{t.cpu}-{ctx.config}'
+        libs = ['libwebrtc.so']
+    else:
+        stage_name = f'libwebrtc-{t.cpu}-{ctx.config}'
+        libs = ['libwebrtc.dll.lib', 'libwebrtc.dll']
+    stage = os.path.join(out, 'package', stage_name)
+    rm_rf(stage)
+    mkdir_p(os.path.join(stage, 'lib'))
+    for lib in libs:
+        shutil.copy2(os.path.join(out, lib), os.path.join(stage, 'lib'))
+    shutil.copy2(os.path.join(ctx.libwebrtc_dir, 'LICENSE'), stage)
+    shutil.copytree(os.path.join(ctx.libwebrtc_dir, 'include'), os.path.join(stage, 'include'),
+                    ignore=shutil.ignore_patterns('.*'))
+
+    zip_name = package_name(name, ctx.config)
+    zip_path = os.path.join(out, 'package', zip_name)
+    zip_dir(stage, zip_path)
+    publish(ctx, zip_path, zip_name)
+
+
+# ---------------------------------------------------------------------------
+# Unit tests (rtc_unittests, debug) on the host platform
+# ---------------------------------------------------------------------------
+
+TEST_RESOURCES_BUCKET = 'chromium-webrtc-resources'
+
+
+def test_resources_hook(ctx: Context) -> List[str]:
+    """The DEPS hook that downloads src/resources (audio/video test files)."""
+    scope: Dict = {}
+    with open(os.path.join(ctx.src_dir, 'DEPS')) as f:
+        exec(f.read(), {'Var': lambda name: '{%s}' % name, 'Str': str}, scope)
+    for hook in scope.get('hooks', []):
+        action = list(hook.get('action', []))
+        if TEST_RESOURCES_BUCKET in action:
+            return action
+    raise RuntimeError(f'no DEPS hook downloads from {TEST_RESOURCES_BUCKET}')
+
+
+def fetch_test_resources(ctx: Context):
+    """Download src/resources and check every .sha1 has its file.
+
+    The files are large raw audio/video used only by unit tests. They are kept
+    out of source caches (see clean_outputs) and, since a cached checkout may
+    skip gclient sync, fetched here by running the same hook gclient would.
+    """
+    # gclient runs hooks from the directory holding .gclient. run_hooks()
+    # skips this one during sync, so it always runs here.
+    run(test_resources_hook(ctx), cwd=ctx.gclient_dir)
+    resources = os.path.join(ctx.src_dir, 'resources')
+    missing, count, size = [], 0, 0
+    for root, _, files in os.walk(resources):
+        for name in files:
+            if not name.endswith('.sha1'):
+                continue
+            path = os.path.join(root, name[:-len('.sha1')])
+            if os.path.isfile(path):
+                count += 1
+                size += os.path.getsize(path)
+            else:
+                missing.append(os.path.relpath(path, ctx.src_dir))
+    if missing:
+        raise RuntimeError(f'{len(missing)} test resources missing after download, '
+                           f'e.g. {missing[:5]}')
+    logging.info('test resources: %d files, %.2f GB', count, size / 1e9)
+
+
+def run_tests(ctx: Context):
+    fetch_test_resources(ctx)
+    apply_patches(ctx, TEST_PATCHES, ('test', *TEST_PATCHES))
+    gn_args = [
+        'is_debug=true',
+        'rtc_include_tests=true',
+        *[a for a in COMMON_GN_ARGS if not a.startswith('rtc_enable_protobuf=')],
+        'rtc_enable_protobuf=true',
+        *TEST_GN_ARGS[HOST],
+    ]
+    out = ctx.out_dir('rtc_unittests')
+    gn_gen(ctx, out, gn_args)
+    ninja(ctx, out, ['rtc_unittests'])
+    # file_utils_override.cc takes the project root as two levels above the
+    # real binary path: <work>/_out for <work>/_out/build/<dir>. Point its
+    # resources/ at src/resources.
+    project_root = os.path.dirname(os.path.dirname(os.path.realpath(out)))
+    link_dir(os.path.join(project_root, 'resources'), os.path.join(ctx.src_dir, 'resources'))
+    exe = 'rtc_unittests.exe' if HOST == 'Windows' else 'rtc_unittests'
+    run([os.path.join(out, exe)], cwd=ctx.src_dir)
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+BUILDERS = {
+    'apple': build_apple,
+    'android': build_android,
+    'libwebrtc': build_libwebrtc,
+}
+
+
+def package_name(name: str, config: str) -> str:
+    t = TARGETS[name]
+    if t.kind == 'libwebrtc':
+        return f'libwebrtc-{t.os}-{t.cpu}-{config}.zip'
+    return t.package
+
+
+def write_fake_packages(targets: List[str], package_dir: str, config: str):
+    """Placeholder files named like the real packages, for release dry runs."""
+    mkdir_p(package_dir)
+    for name in targets:
+        path = os.path.join(package_dir, package_name(name, config))
+        with open(path, 'w') as f:
+            f.write(f'placeholder for {name} ({config}); not a real build\n')
+        write_checksums(path)
+
+
+def add_common_args(p: argparse.ArgumentParser):
+    p.add_argument('--commit',
+                   help='webrtc-sdk/webrtc commit, tag or "HEAD" (default: WEBRTC_COMMIT in VERSION)')
+    p.add_argument('--work-dir', default=ROOT_DIR,
+                   help='directory for _source and _package (default: %(default)s)')
+    p.add_argument('--package-dir', help='output directory (default: <work-dir>/_package)')
+    p.add_argument('--no-sync', action='store_true',
+                   help='build the existing checkout without fetching or gclient sync')
+    p.add_argument('--fresh', action='store_true',
+                   help='delete the existing checkout (and depot_tools) and sync from scratch')
+    p.add_argument('--jobs', type=int, help='ninja parallelism (default: autoninja)')
+    p.add_argument('--no-history', action='store_true',
+                   help='shallow dependency checkouts (much less to download; src is always '
+                        'a full clone); for throwaway machines, a cached checkout should keep '
+                        'history')
+    p.add_argument('--sync-for', nargs='+', default=[], choices=list(TARGETS), metavar='TARGET',
+                   help='also sync for these targets (their target_os), so a checkout or git '
+                        'cache shared with their jobs stays identical')
+    p.add_argument('--keep-out', action='store_true',
+                   help='keep build outputs (src/out) and the patched tree for local '
+                        'incremental builds; by default both are cleaned')
+
+
+def clean_outputs(ctx: Context):
+    """Remove build outputs and downloaded test resources.
+
+    Neither belongs in a source cache: outputs are per build, and the test
+    resources (large raw audio/video, gitignored next to their tracked .sha1
+    files) are fetched by `test` when needed.
+    """
+    rm_rf(ctx.out_root)
+    if ctx.link_out:
+        rm_rf(os.path.join(os.path.dirname(ctx.out_root), 'resources'))  # test link
+    # The src/out link (older checkouts: a real src/out directory).
+    rm_rf(os.path.join(ctx.src_dir, 'out'))
+    if os.path.isdir(os.path.join(ctx.src_dir, 'resources')):
+        run(['git', 'clean', '-ffdqX', '--', 'resources'], cwd=ctx.src_dir)
+
+
+def cleanup(ctx: Context):
+    """Leave only pristine sources behind: no build outputs, no patches."""
+    if not os.path.isdir(os.path.join(ctx.src_dir, '.git')):
+        return
+    clean_outputs(ctx)
+    if ctx.applied != ():
+        reset_tree(ctx)
+
+
+def main():
+    logging.basicConfig(level=logging.INFO, format='%(message)s')
+    # Child Python tools (gclient, gn helpers) write to a pipe in CI and would
+    # otherwise block-buffer their progress output.
+    os.environ['PYTHONUNBUFFERED'] = '1'
+    threading.Thread(target=_heartbeat, daemon=True).start()
+    parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
+    sub = parser.add_subparsers(dest='op', required=True)
+
+    bp = sub.add_parser('build', help='build release targets')
+    bp.add_argument('targets', nargs='+', choices=list(TARGETS), metavar='TARGET',
+                    help=', '.join(TARGETS))
+    bp.add_argument('--debug', action='store_true')
+    bp.add_argument('--libwebrtc-dir',
+                    help='webrtc-sdk/libwebrtc checkout (libwebrtc_* targets)')
+    bp.add_argument('--apple-slices', type=lambda v: [x for x in v.split(',') if x],
+                    help='apple targets: build only these comma-separated slices and archive '
+                         'each one for assemble-apple (see apple-slices)')
+    bp.add_argument('--android-archs', type=lambda v: [x for x in v.split(',') if x],
+                    help='android targets: build only these comma-separated archs into a '
+                         'partial aar for assemble-android (see android-archs)')
+    add_common_args(bp)
+
+    dp = sub.add_parser('assemble-android', help='merge the per-arch aars of an android target')
+    dp.add_argument('target', choices=[n for n, t in TARGETS.items() if t.kind == 'android'])
+    dp.add_argument('--parts-dir', required=True, help='directory with the partial aars')
+    add_common_args(dp)
+
+    sub.add_parser('android-archs', help='print the android archs as JSON')
+
+    ap = sub.add_parser('assemble-apple',
+                        help='build the xcframework zip of an apple target from slice archives')
+    ap.add_argument('target', choices=[n for n, t in TARGETS.items() if t.kind == 'apple'])
+    ap.add_argument('--slices-dir', required=True, help='directory with the slice tars')
+    ap.add_argument('--debug', action='store_true')
+    add_common_args(ap)
+
+    sub.add_parser('apple-slices', help='print the apple slice names as JSON')
+
+    kp = sub.add_parser('packages', help='print the file name of every release package, one '
+                                         'per line (the set a release must contain)')
+    kp.add_argument('--debug', action='store_true')
+
+    tp = sub.add_parser('test', help='build and run rtc_unittests (debug) for the host')
+    add_common_args(tp)
+
+    sp = sub.add_parser('sync', help='fetch and gclient sync the checkout for the given targets')
+    sp.add_argument('targets', nargs='+', choices=list(TARGETS), metavar='TARGET',
+                    help=', '.join(TARGETS))
+    add_common_args(sp)
+
+    fp = sub.add_parser('fake', help='write placeholder packages (same names, with checksums) '
+                                     'for testing the release workflows without building')
+    fp.add_argument('targets', nargs='*', metavar='TARGET',
+                    help='default: all targets (' + ', '.join(TARGETS) + ')')
+    fp.add_argument('--debug', action='store_true')
+    fp.add_argument('--package-dir', default=os.path.join(ROOT_DIR, '_package'))
+
+    args = parser.parse_args()
+
+    if args.op == 'apple-slices':
+        print(json.dumps(APPLE_SLICES))
+        return
+    if args.op == 'android-archs':
+        print(json.dumps(ANDROID_ARCHS))
+        return
+    if args.op == 'packages':
+        config = 'debug' if args.debug else 'release'
+        print('\n'.join(package_name(n, config) for n in TARGETS))
+        return
+    if args.op == 'assemble-android':
+        ctx = Context(args)
+        assemble_android(ctx, args.target, TARGETS[args.target], os.path.abspath(args.parts_dir))
+        return
+
+    if args.op == 'assemble-apple':
+        if HOST != 'Darwin':
+            parser.error('assemble-apple needs macOS')
+        ctx = Context(args)
+        assemble_apple_from_slices(ctx, args.target, TARGETS[args.target],
+                                   os.path.abspath(args.slices_dir))
+        return
+
+    if args.op == 'fake':
+        unknown = [n for n in args.targets if n not in TARGETS]
+        if unknown:
+            parser.error(f'unknown targets: {", ".join(unknown)}')
+        write_fake_packages(args.targets or list(TARGETS), args.package_dir,
+                            'debug' if args.debug else 'release')
+        return
+
+    if args.op in ('build', 'sync'):
+        targets = list(dict.fromkeys(args.targets))
+        bad = [x for x in (getattr(args, 'apple_slices', None) or []) if x not in APPLE_SLICES]
+        if bad:
+            parser.error(f'unknown apple slices: {", ".join(bad)} (choose from {", ".join(APPLE_SLICES)})')
+        if getattr(args, 'apple_slices', None) and any(TARGETS[n].kind != 'apple' for n in targets):
+            parser.error('--apple-slices only applies to apple targets')
+        bad = [x for x in (getattr(args, 'android_archs', None) or []) if x not in ANDROID_ARCHS]
+        if bad:
+            parser.error(f'unknown android archs: {", ".join(bad)} (choose from {", ".join(ANDROID_ARCHS)})')
+        if getattr(args, 'android_archs', None) and any(TARGETS[n].kind != 'android' for n in targets):
+            parser.error('--android-archs only applies to android targets')
+        sync_targets = [*targets, *args.sync_for]
+    else:
+        if HOST not in TEST_GN_ARGS:
+            parser.error(f'unit tests are not supported on {HOST}')
+        targets = []
+        sync_targets = args.sync_for
+    wrong_host = [n for n in sync_targets if TARGETS[n].host != HOST]
+    if wrong_host:
+        parser.error(f'cannot build {", ".join(wrong_host)} on {HOST}')
+    target_os = sorted({os_ for n in sync_targets for os_ in TARGETS[n].target_os})
+
+    ctx = Context(args)
+    if args.fresh:
+        if args.no_sync:
+            parser.error('--fresh and --no-sync are mutually exclusive')
+        # Remove the children, not _source itself: it may be a cache mount.
+        rm_rf(ctx.gclient_dir)
+        rm_rf(ctx.depot_tools_dir)
+    setup_environment(ctx)
+    if args.no_sync and not os.path.isdir(ctx.src_dir):
+        parser.error(f'--no-sync: {ctx.src_dir} does not exist')
+    if not args.keep_out:
+        # Leftovers from a job that was killed before its cleanup ran.
+        clean_outputs(ctx)
+
+    try:
+        if not args.no_sync:
+            sync(ctx, target_os)
+        mkdir_p(ctx.out_root)
+        if ctx.link_out:
+            link_dir(os.path.join(ctx.src_dir, 'out'), ctx.out_root)
+
+        if args.op == 'test':
+            run_tests(ctx)
+        elif args.op == 'build':
+            for name in targets:
+                t = TARGETS[name]
+                logging.info('=== build %s (%s) ===', name, ctx.config)
+                BUILDERS[t.kind](ctx, name, t)
+                if not args.keep_out:
+                    # Its files are in _package now; free the disk for the next target.
+                    rm_rf(ctx.out_dir(name))
+            logging.info('Packages in %s:', ctx.package_dir)
+            for name in sorted(os.listdir(ctx.package_dir)):
+                logging.info('  %s', name)
+    finally:
+        if not args.keep_out:
+            cleanup(ctx)
+
+
+if __name__ == '__main__':
+    main()

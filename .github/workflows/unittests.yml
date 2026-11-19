@@ -4,9 +4,22 @@ on:
   workflow_dispatch:
     inputs:
       commitHash:
-        description: 'webrtc-sdk commit hash'
+        description: 'webrtc-sdk/webrtc commit hash (default: WEBRTC_COMMIT in VERSION)'
         default: ''
-        required: true
+        required: false
+      force_cache_update:
+        description: 'Rebuild the Linux source cache from scratch'
+        type: boolean
+        default: false
+      platform:
+        description: 'Platform to test'
+        type: choice
+        default: all
+        options:
+          - all
+          - linux
+          - macos
+          - windows
   pull_request:
     paths-ignore:
       - '**.md'
@@ -23,45 +36,55 @@ on:
       - '.gitignore'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Per platform, so manual single-platform runs do not cancel each other.
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.inputs.platform || 'all' }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
+env:
+  WEBRTC_REPO_URL: https://github.com/${{ vars.WEBRTC_REPO || 'webrtc-sdk/webrtc' }}.git
+
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+    - id: plan
+      env:
+        PLATFORM: ${{ github.event.inputs.platform || 'all' }}
+      run: |
+        # linux shares the android/libwebrtc_linux source cache, so it syncs
+        # with the same targets (--sync-for) to keep the cache identical.
+        # The D:\ work drive on Windows is too small for a webrtc checkout.
+        all='[
+          {"target":"linux_x86_64","platform":"linux","os":"namespace-profile-webrtc-android",
+           "cache_backend":"namespace","sync_for":"android libwebrtc_linux_x64","work_dir":"."},
+          {"target":"macos_arm64","platform":"macos","os":"macos-26",
+           "cache_backend":"none","sync_for":"apple","work_dir":"."},
+          {"target":"windows_x86_64","platform":"windows","os":"windows-2025",
+           "cache_backend":"none","sync_for":"libwebrtc_win_x64","work_dir":"C:\\webrtc"}
+        ]'
+        echo "matrix=$(jq -c --arg p "$PLATFORM" '[.[] | select($p == "all" or .platform == $p)]' <<< "$all")" >> "$GITHUB_OUTPUT"
+
   unittests:
     name: ${{ matrix.target }}
+    needs: plan
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - target: ubuntu-24.04_x86_64
-            os: ubuntu-24.04
-          - target: macos_arm64
-            os: macos-26
-          - target: windows_x86_64
-            os: windows-2025
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     defaults:
       run:
-        working-directory: ./build
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - name: Disk Cleanup
-        if: runner.os == 'Linux'
-        working-directory: ${{ github.workspace }}
-        run: |
-          df -h
-          docker container prune -f
-          docker image prune -a -f
-          sudo rm -rf /usr/local/share/boost
-          sudo rm -rf /usr/share/dotnet
-          df -h
-      - name: Disk Cleanup
         if: runner.os == 'Windows'
         shell: pwsh
-        working-directory: ${{ github.workspace }}
         run: |
           Get-PSDrive -PSProvider FileSystem | Select-Object Name, Used, Free
           foreach ($dir in @('C:\Android', 'C:\Program Files (x86)\Android', 'C:\Program Files\Google\Chrome', "$env:AGENT_TOOLSDIRECTORY\Ruby", "$env:AGENT_TOOLSDIRECTORY\go", "$env:AGENT_TOOLSDIRECTORY\node")) {
@@ -72,38 +95,22 @@ jobs:
           Get-PSDrive -PSProvider FileSystem | Select-Object Name, Used, Free
       - name: Install dependencies
         if: runner.os == 'Linux'
-        run: sudo ./scripts/apt_install_x86_64.sh
-      - name: Install test dependencies
-        if: runner.os == 'Linux'
-        run: sudo ./scripts/apt_install_test_deps.sh
+        run: |
+          sudo ./scripts/apt_install_x86_64.sh
+          sudo ./scripts/apt_install_test_deps.sh
       - name: Select Xcode 26.0
         if: runner.os == 'macOS'
         run: sudo xcode-select --switch /Applications/Xcode_26.0.app/Contents/Developer
+      - name: Source cache
+        id: cache
+        uses: ./.github/actions/source-cache
+        with:
+          backend: ${{ matrix.cache_backend }}
+          id: linux
+          commit: ${{ github.event.inputs.commitHash }}
+          force: ${{ github.event.inputs.force_cache_update || 'false' }}
       - name: Build and run unittests
-        if: runner.os != 'Windows'
-        env:
-          COMMIT_HASH: ${{ github.event.inputs.commitHash }}
         run: |
-          if [ -n "$COMMIT_HASH" ]; then
-            python3 run.py build ${{ matrix.target }} --debug --test --commit "$COMMIT_HASH"
-          else
-            python3 run.py build ${{ matrix.target }} --debug --test
-          fi
-      - name: Build and run unittests
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          COMMIT_HASH: ${{ github.event.inputs.commitHash }}
-        run: |
-          # GitHub Actions の作業ドライブ (D:) は容量が少ないので、
-          # ソースとビルド成果物は C:\ に置く (build.windows_x86_64.ps1 と同じ)。
-          # Put the source and build output on C:\ because the D:\ work drive
-          # is too small (same as build.windows_x86_64.ps1).
-          $extra = @()
-          if ($env:COMMIT_HASH) {
-            $extra = @('--commit', $env:COMMIT_HASH)
-          }
-          python3 run.py build ${{ matrix.target }} `
-            --source-dir 'C:\webrtc' --build-dir 'C:\webrtc-build' `
-            --debug --test `
-            --webrtc-extra-gn-args 'symbol_level=1' @extra
+          python3 scripts/build.py test --sync-for ${{ matrix.sync_for }} \
+            ${{ steps.cache.outputs.fresh-arg }} ${{ steps.cache.outputs.history-arg }} \
+            --work-dir '${{ matrix.work_dir }}' --commit '${{ steps.cache.outputs.commit }}'
