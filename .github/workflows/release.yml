@@ -164,13 +164,12 @@ jobs:
         GH_TOKEN: ${{ github.token }}
       run: |
         gh run download "${{ needs.prepare.outputs.build_run }}" -R "$GITHUB_REPOSITORY" -p 'packages-*' -D "$RUNNER_TEMP/dl"
-        mkdir -p artifacts && find "$RUNNER_TEMP/dl" -type f -exec mv {} artifacts/ \;
         gh run download "${{ needs.prepare.outputs.build_run }}" -R "$GITHUB_REPOSITORY" -n build-info -D "$RUNNER_TEMP"
     - name: Download packages (this run)
       if: needs.prepare.outputs.build_run == ''
       uses: actions/download-artifact@v4
       with:
-        path: artifacts
+        path: ${{ runner.temp }}/dl
         pattern: packages-*
         merge-multiple: true
     - name: Download build info (this run)
@@ -180,17 +179,29 @@ jobs:
         name: build-info
         path: ${{ runner.temp }}
     - name: Verify packages
-      working-directory: artifacts
       run: |
         set -euo pipefail
+        # Publish exactly the release package set (scripts/build.py packages),
+        # each with its checksum file; a missing file fails the release. Other
+        # files are not published, e.g. the libwebrtc-*.zip of builds made
+        # before those packages moved to webrtc-sdk/libwebrtc-wrapper.
+        mkdir -p artifacts
+        missing=0
+        while read -r pkg; do
+          for f in "$pkg" "$pkg.shasum"; do
+            src=$(find "$RUNNER_TEMP/dl" -type f -name "$f" | head -1)
+            if [ -z "$src" ]; then
+              echo "::error::$f missing from the build"; missing=1
+            else
+              mv "$src" artifacts/
+            fi
+          done
+        done < <(python3 scripts/build.py packages)
+        [ "$missing" -eq 0 ] || exit 1
+        extra=$(find "$RUNNER_TEMP/dl" -type f -printf '%f ')
+        [ -z "$extra" ] || echo "::notice::not release packages, not published: $extra"
+        cd artifacts
         ls -l
-        # Exactly the release package set (scripts/build.py packages), each
-        # with its checksum file.
-        python3 ../scripts/build.py packages | while read -r f; do echo "$f"; echo "$f.shasum"; done | sort > "$RUNNER_TEMP/expected"
-        ls -1 | sort > "$RUNNER_TEMP/actual"
-        if ! diff -u "$RUNNER_TEMP/expected" "$RUNNER_TEMP/actual"; then
-          echo "::error::package set differs from scripts/build.py packages (- missing, + unexpected)"; exit 1
-        fi
         shasum -a 256 -c *.shasum
     - name: Create release
       id: release
@@ -203,7 +214,7 @@ jobs:
         python3 scripts/release.py notes --base "${{ needs.prepare.outputs.base_commit }}" \
           --head "${{ needs.prepare.outputs.commit }}" --version "$VERSION" --out "$RUNNER_TEMP/notes.md"
         # Record the exact build inputs.
-        jq -r '"\nBuilt from \(env.GITHUB_REPOSITORY)@\(.repo) with the libwebrtc wrapper webrtc-sdk/libwebrtc@\(.libwebrtc) (\(.configuration))."' \
+        jq -r '"\nBuilt from \(env.GITHUB_REPOSITORY)@\(.repo) (\(.configuration))."' \
           "$RUNNER_TEMP/build-info.json" >> "$RUNNER_TEMP/notes.md"
         if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
           # Never replace a published package: builds are not reproducible
